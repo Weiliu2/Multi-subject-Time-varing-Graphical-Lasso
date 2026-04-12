@@ -4,6 +4,7 @@ import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+import pandas as pd
 
 """
     TVGL Neural Network solver v2.4
@@ -14,11 +15,14 @@ import time
     5.Add calculate_information_criterion function in the main class and hyperparameter tuner function 
     6.Add time stamps input so that the algorithm can accept asynchronous sequences
     7.Normalize log-likelihood by removing coefficient self.ns. This alleviates over penalization of time stamps with very few observations. 
+    8.Add a auto mode for fit function to train the model until convergence
+    9.Add learning rate control in hyperparameter_tuner function
+    10.Change hyperparameter_tuner function to warm start 
 """
 
 class TVGLNeural(nn.Module):
     def __init__(self, lambda_val: float, beta: float, observations: list[np.ndarray] | list[list[np.ndarray]], ts: list[int], 
-                 covariance=None, ns=None, mask=None, penalty_type='laplacian', learning_rate=0.01, fit_epochs=1):
+                 covariance=None, ns=None, mask=None, penalty_type='laplacian', learning_rate=0.005, fit_epochs=1):
         super().__init__()
         self.T = len(observations)
         if isinstance(observations[0], np.ndarray):
@@ -101,7 +105,6 @@ class TVGLNeural(nn.Module):
         Thetas = L @ L.transpose(-1, -2) + 1e-10 * self.I # (T,p,p) dim=3
         # logdet via Cholesky structure
         logdets = 2 * torch.sum(torch.log(diag), dim=-1) # (T) dim=1
-
         return Thetas, logdets
     
     def log_likelihood_loss(self, Thetas: torch.Tensor, logdets: torch.Tensor) -> torch.Tensor:
@@ -147,19 +150,44 @@ class TVGLNeural(nn.Module):
         temporal = self.beta * self.temporal_penalty(Thetas)
         return likelihood + sparsity + temporal
 
-    def fit(self, verbose: bool=True):
+    def fit(self, verbose: bool=True, mode: str="manual", tol: float=1e-10):
         optimizer = optim.Adam(self.parameters(), lr=self.lr)
         self.losses = []
 
-        for epoch in range(self.epochs):
+        if mode == "manual":
+            for epoch in range(self.epochs):
+                optimizer.zero_grad()
+                loss = self.forward()
+                loss.backward()
+                optimizer.step()
+                self.losses.append(loss.item())
+
+                if verbose==True and (epoch % 100 == 0 or epoch == self.epochs - 1):
+                    print(f"Epoch {epoch}: Loss = {loss.item():.6f}")
+        elif mode == "auto":
+            epoch = 1
             optimizer.zero_grad()
             loss = self.forward()
             loss.backward()
             optimizer.step()
             self.losses.append(loss.item())
-
-            if verbose==True and (epoch % 100 == 0 or epoch == self.epochs - 1):
+            last_loss = loss.item()
+            delta_loss = torch.inf
+            while np.abs(delta_loss) / np.abs(last_loss) > 1e-15:
+                epoch += 1
+                optimizer.zero_grad()
+                loss = self.forward()
+                loss.backward()
+                optimizer.step()
+                self.losses.append(loss.item())      
+                delta_loss = loss.item() - last_loss
+                last_loss = loss.item() 
+                if verbose==True and (epoch % 100 == 0):
+                    print(f"Epoch {epoch}: Loss = {loss.item():.6f}")
+            if verbose==True:
                 print(f"Epoch {epoch}: Loss = {loss.item():.6f}")
+            self.total_step = epoch
+
     
     """Score computation for hyperparameter selection"""
     def calculate_information_criterion(self, criterion: str) -> torch.Tensor:
@@ -191,6 +219,18 @@ class TVGLNeural(nn.Module):
             final_thetas = final_thetas.detach()
         nzeros_mask = final_thetas.abs() >= thr
         return nzeros_mask.sum() / self.T / self.p 
+    
+    def Jaccard_similarity(self, thr: float=1e-6):
+        """Calculate Jaccard similarity between adjacent graphs"""
+        with torch.no_grad():
+            final_thetas, _ = self.compute_thetas()
+            final_thetas = final_thetas.detach()
+        nzeros_mask = final_thetas.abs() >= thr
+        graph_last = nzeros_mask[:-1]
+        graph_curr = nzeros_mask[1:]
+        intersec = graph_last * graph_curr
+        union = (graph_last + graph_curr) > 0
+        return (intersec.sum(dim=(-2,-1)) / union.sum(dim=(-2,-1))).mean()
 
     """Rough edge construction, edge prediction performance (f1 score), temporal deviation ratio"""
     def tensor2list(self, tensor_dt: torch.Tensor) -> list[np.ndarray] | np.ndarray:
@@ -260,15 +300,15 @@ class TVGLNeural(nn.Module):
             return f1
         else: raise ValueError("Both ground truth Thetas and predictions must be numpy array or a list of numpy arrays.")
 
-    def temporal_deviation_ratio(self, pred_thetas_raw: torch.Tensor, returnlist: bool=True) -> list[float] | torch.Tensor:
+    def temporal_deviation_ratio(self, pred_thetas_raw: torch.Tensor, returnlist: bool=True) -> tuple[list[float] | torch.Tensor, float | torch.Tensor]:
         """This score is the ratio of the temporal deviation at the current time to the average
         temporal deviation value across all time stamps."""
         cur_TD_ratios = torch.norm(pred_thetas_raw[1:] - pred_thetas_raw[:-1], "fro", dim=(-2,-1))
         total_TD_ratio = cur_TD_ratios.sum()
         TD_ratio = cur_TD_ratios / total_TD_ratio
         if returnlist == True:
-            return TD_ratio.tolist()
-        else: return TD_ratio
+            return TD_ratio.tolist(), TD_ratio.mean().item()
+        else: return TD_ratio, TD_ratio.mean()
 
 
 def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]],
@@ -277,11 +317,13 @@ def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]]
                          beta_range: list[float] | np.ndarray = np.logspace(-4, 0, 10),
                          penalty_type: str = 'l1',
                          criterion: str = 'ebic',
-                         ad_min : int = 5,
-                         ad_max : int = 10,
+                         ad_min_rate : float = 0.05,
+                         ad_max_rate : float = 0.15,
                          thr : float = 1e-3,
                          epoch: int = 100,
-                         verbose: bool = True) -> dict | list[dict]:
+                         lr : float = 0.005,
+                         verbose: bool = True,
+                         mode: str = "manual") -> dict | list[dict]:
     # precompute covariance matrices, ns and mask
     tmp_model = TVGLNeural(lambda_val=0, beta=0, observations=observations, ts=ts)
     empirical_covs = tmp_model.empirical_covs
@@ -302,6 +344,7 @@ def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]]
                                     observations=observations, 
                                     ts=ts,
                                     penalty_type=penalty_type,
+                                    learning_rate = lr,
                                     fit_epochs=epoch,
                                     covariance=empirical_covs,
                                     ns=ns,
@@ -325,52 +368,55 @@ def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]]
                 }
     elif criterion == 'transition':
         results = []
-        for lambda_val in lambda_range:
+        best_lambda = None
+        best_beta = None
+        ad_min = ad_min_rate * empirical_covs.shape[-1] 
+        ad_max = ad_max_rate * empirical_covs.shape[-1]
+        for i, lambda_val in enumerate(lambda_range):
             if verbose == True:
-                print(f"Testing lambda={lambda_val:.4f}, beta is fixed to 0")
-            model = TVGLNeural(lambda_val=lambda_val, 
-                                  beta=0, 
-                                  observations=observations, 
-                                  ts=ts,
-                                  penalty_type=penalty_type,
-                                  fit_epochs=epoch,
-                                  covariance=empirical_covs,
-                                  ns=ns,
-                                  mask=mask)
-            model.fit(verbose=False)
-            # calculate average degree
-            ad = model.calculate_average_degree(thr)
-            if verbose == True:
-                print(f"Average degree for lambda={lambda_val} is {ad}")
-            if ad >= ad_min and ad <= ad_max:
+                print("-"*20)
+                print(f"Testing lambda={lambda_val:.4f}")
                 score = torch.inf
-                for beta_val in beta_range:
-                    if verbose == True:
-                        print(f"Demanded lambda find={lambda_val:.4f}, testing beta={beta_val:.4f}")
+                best_ad = torch.tensor(0)
+                best_js = torch.tensor(0)
+                # warm start
+                for beta_val in lambda_range[:i+1]:
                     model = TVGLNeural(lambda_val=lambda_val, 
                                         beta=beta_val, 
                                         observations=observations, 
                                         ts=ts,
                                         penalty_type=penalty_type,
+                                        learning_rate=lr,
                                         fit_epochs=epoch,
                                         covariance=empirical_covs,
                                         ns=ns,
                                         mask=mask)
-                    model.fit(verbose=False)
+                    model.fit(verbose=False, mode=mode)
+                    # compute number of sharp transitions
                     with torch.no_grad():
                         final_thetas, _ = model.compute_thetas()
                         final_thetas = final_thetas.detach()
-                    TD_ratios = model.temporal_deviation_ratio(final_thetas, returnlist=False)
-                    sharp_trans = TD_ratios > 1.0
+                    TD_ratios, TD_ratios_mean = model.temporal_deviation_ratio(final_thetas, returnlist=False)
+                    sharp_trans = TD_ratios > TD_ratios_mean*1.25
                     count = sharp_trans.sum()
-                    if count < score:
+                    # compute average degree and Jaccard similarity
+                    ad = model.calculate_average_degree(thr)
+                    js = model.Jaccard_similarity(thr)
+                    if verbose == True:
+                        print(f"Sharp transitions for beta={beta_val:.4f} is {count}, average degree is {ad} and Jaccard similarity is {js}")
+                    # check requirements
+                    if 0 < count < score and ad_min <= ad <= ad_max and 0.35 <= js <= 0.8:
+                        best_lambda = lambda_val
                         best_beta = beta_val
                         score = count
-                results.append({
-                        "best lambda": lambda_val,
-                        "average degree": ad,
+                        best_ad = ad
+                        best_js = js
+                        results.append({
+                        "best lambda": best_lambda,
+                        "average degree": best_ad.item(),
                         "best beta": best_beta,
-                        "sharp transitions": score
+                        "sharp transitions": score.item() if type(score)!=float else score,
+                        "Jaccard similarity": best_js.item()
                         })
         return results
 
@@ -437,12 +483,12 @@ if __name__ == "__main__":
         penalty_type='l2',
         criterion='transition',
         verbose=False,
-        epoch=50
+        epoch=50,
     )
     # lambda_val = results['best_lambda']
     # beta = results['best_beta']
     # print(f"Best lambda: {lambda_val}, best beta: {beta}.")
-    print(results)
+    print(pd.DataFrame(results))
     end = time.perf_counter()
     print(f"Time cost for hyperparameter tuning: {end - start:.6f} seconds")
     print("------------------------------")
@@ -467,7 +513,7 @@ if __name__ == "__main__":
     pred_thetas, _ = model.compute_thetas()
     losses = model.losses
 
-    TD_ratios = model.temporal_deviation_ratio(pred_thetas)
+    TD_ratios, TD_ratios_mean = model.temporal_deviation_ratio(pred_thetas)
     f1 = model.f1_score(pred_thetas, true_thetas)
     print(f"F_1 score is {f1}.")
 
@@ -482,7 +528,7 @@ if __name__ == "__main__":
     
     plt.subplot(1, 2, 2)
     plt.plot(TD_ratios)
-    plt.axhline(y=1, linestyle='--', linewidth=1, color='red')
+    plt.axhline(y=TD_ratios_mean, linestyle='--', linewidth=1, color='red')
     plt.title('Temporal deviation ratios')
     plt.xlabel('Epoch')
     plt.ylabel('TD ratios')
