@@ -1,0 +1,140 @@
+\section{Precision matrix and partial correlation}
+\label{subsec: pcorrandprec}
+In this part, we introduce the definition of precision matrix and partial correlation. 
+Some useful properties of them are discussed. 
+Below we suppose random variables $X=(X_1,X_2,\cdots,X_n)$ are jointly Gaussian with 0 mean and covariance $\Sigma$,  
+and denote $X-\{X_i\}$ by $V_i$. 
+
+\begin{definition}(\textbf{Precision matrix})
+
+    The precision matrix $\Theta$ of multivariate Gaussian random variables $(X_1,\cdots,X_n)$ is the inversion of the population covariance $\Sigma$.
+\end{definition}
+
+The precision matrix of multivariate Gaussian random variables can be used to test the conditional independence. 
+In fact, given values of all other identities, 
+any two variables $X_i$ and $X_j$ are conditionally independent if $\Theta_{ij}=0$. 
+This is shown in the following theorem.
+\begin{theorem}
+    \label{thm: ch1_conind}
+    $X_i$ and $X_j$ are conditionally independent given $V_{i,j}$ if and only if $\Theta_{ij}=\Theta_{ji}=0$.
+\end{theorem}
+\begin{proof}
+    Without loss of generality we assume $i=1$, $j=2$. For short, we simplify $V_{i,j}$ by $V$.
+    The joint Gaussian distribution of $(X_1, X_2)$ condition on $V$ is given by (ignoring the constant) 
+    \begin{align*}
+        p(X_1,X_2|V)=&|\Theta|^{\frac{1}{2}}\exp\{-\frac{1}{2}[X_1 X_2]\Theta\begin{bmatrix}
+            X_1 \\
+            X_2 
+        \end{bmatrix}\}\\
+        =& \text{det}\bigg(\begin{bmatrix}
+            \Theta_{11} & \Theta_{12} \\
+            \Theta_{21} & \Theta_{22} 
+        \end{bmatrix}\bigg)^{\frac{1}{2}}\exp\{-\frac{1}{2}[X_1 X_2]\begin{bmatrix}
+            \Theta_{11} & \Theta_{12} \\
+            \Theta_{21} & \Theta_{22}
+        \end{bmatrix}\begin{bmatrix}
+            X_1 \\
+            X_2
+        \end{bmatrix}\} \\
+        =& |\Theta_{11}|^{\frac{1}{2}}\exp\{-\frac{1}{2}X_1\Theta_{11}X_1\}\cdot|\Theta_{22}|^{\frac{1}{2}}\exp\{-\frac{1}{2}X_2\Theta_{22}X_2\} \\
+        =& p(X_1|V)\cdotp(X_2|V),
+    \end{align*}
+    if and only if $\Theta_{12}=\Theta_{21}=0$. Since any $X_i$ and $X_j$ can be moved to the place of $X_1$ and $X_2$ by permutation, this completes the proof. 
+\end{proof}
+
+The precision matrix determines the conditional dependence between two Gaussian random variables. 
+And the partial correlation measures the relation strength of the two random variables when holding other random variables constant. 
+The relation strength is featured by the residuals of $X_i$ and $X_j$ regressing on the rest random variables respectively. 
+
+\begin{definition}(\textbf{Partial correlation})
+    
+    The partial correlation $\rho_{i,j|V_{i,j}}$ between $X_i$ and $X_j$ given the rest of variables
+    is the correlation between the residual resulting from regressing $X_i$ on $V_{i,j}$ and $X_j$ on $V_{i,j}$. 
+    More formally, denote residuals by $R_i=X_i-\beta_i^TV_{i,j}$ and $R_j=X_j-\beta^T_jV_{i,j}$. 
+    Then, 
+    \begin{equation}
+        \label{eq: ch1_pcorrdef}
+        \rho_{i,j|V_{i,j}} = \frac{\text{cov}(R_i,R_j)}{\sqrt{\text{Var}(R_i)}\sqrt{\text{Var}(R_j)}}.
+    \end{equation} 
+\end{definition}
+
+Since the residual of $X_i$ regressing on $V_{i,j}$ is the orthogonal projection of the linear space spanned by $X$ on the orthogonal complement of the linear space spanned by $V$, 
+it excludes all information that can be explained by the linear combination of $V$, 
+whereby it contains the direct linear influence of $X_j$ on $X_i$. 
+In addition, the partial correlation has close relationship with the precision matrix. 
+\begin{proposition}
+    \label{prop: ch1_pcorr}
+    Let $\Theta$ be the precision matrix of joint distribution of $X$.
+    The partial correlation is equivalent to
+    \begin{equation*}
+        \rho_{i,j|V_{i,j}}=-\frac{\Theta_{ij}}{\sqrt{\Theta_{ii}\Theta_{jj}}}.
+    \end{equation*}
+\end{proposition}
+\begin{proof}
+    Without loss of generality we assume $i=1$, $j=2$. For short, we simplify $V_{i,j}$ by $V$. 
+    Since $\beta_1$ and $\beta_2$ are least square solutions for problems
+    \begin{align*}
+        &\arg\min_{\beta\in\mathbb{R}^{n-2}} \mathbb{E}\|X_1-\beta^TV\|_2^2, \\
+        &\arg\min_{\beta\in\mathbb{R}^{n-2}} \mathbb{E}\|X_2-\beta^TV\|_2^2,
+    \end{align*}
+    and have closed-form $\beta_1=\Sigma_{VV}^{-1}\Sigma_{VX_1}$ and $\beta_2=\Sigma_{VV}^{-1}\Sigma_{VX_2}$ for 0 centered random variables, 
+    Equation (\ref{eq: ch1_pcorrdef}) can be written by 
+    \begin{align}
+        \label{eq: ch1_pcorrprf1}
+        \rho_{1,2|V} &= \frac{\text{cov}(R_1,R_2)}{\sqrt{\text{Var}(R_1)}\sqrt{\text{Var}(R_2)}} \notag \\
+                     &= \frac{\text{cov}(X_1-\Sigma_{VX_1}^T\Sigma_{VV}^{-1}V, X_2-\Sigma_{VX_2}^T\Sigma_{VV}^{-1}V)}{\sqrt{\text{Var}(X_1-\Sigma_{VX_1}^T\Sigma_{VV}^{-1}V)}\sqrt{\text{Var}(X_2-\Sigma_{VX_2}^T\Sigma_{VV}^{-1}V)}}.
+    \end{align}
+    For nominator, we have 
+    \begin{align*}
+        \text{cov}(X_1-\Sigma_{VX_1}^T\Sigma_{VV}^{-1}V, X_2-\Sigma_{VX_2}^T\Sigma_{VV}^{-1}V) &= \mathbb{E}\left[(X_1-\Sigma_{VX_1}^T\Sigma_{VV}^{-1}V)(X_2-\Sigma_{VX_2}^T\Sigma_{VV}^{-1}V)\right] & (\mathbb{E}(R_1)=\mathbb{E}(R_2)=0) \\
+                                                                                               &= \Sigma_{X_1X_2} - \Sigma_{VX_2}^{T}\Sigma_{VV}^{-1}\Sigma_{VX_1}.
+    \end{align*}
+    For denominator, we have 
+    \begin{align*}
+        \text{Var}(X_1-\Sigma_{VX_1}^T\Sigma_{VV}^{-1}V) &= \mathbb{E}\left[(X_1-\Sigma_{VX_1}^T\Sigma_{VV}^{-1}V)(X_1-\Sigma_{VX_1}^T\Sigma_{VV}^{-1}V)\right] \\
+                                                         &= \Sigma_{X_1X_1} -\Sigma_{VX_1}^T\Sigma_{VV}^{-1}\Sigma_{VX_1}.
+    \end{align*}
+    Hence, Equation (\ref{eq: ch1_pcorrprf1}) equals to 
+    \begin{equation}
+        \label{eq: ch1_pcorrprf2}
+        \frac{\Sigma_{X_1X_2} - \Sigma_{VX_2}^{T}\Sigma_{VV}^{-1}\Sigma_{VX_1}}{\sqrt{\Sigma_{X_1X_1} -\Sigma_{VX_1}^T\Sigma_{VV}^{-1}\Sigma_{VX_1}}\sqrt{\Sigma_{X_2X_2} - \Sigma_{VX_2}^{T}\Sigma_{VV}^{-1}\Sigma_{VX_2}}}.
+    \end{equation}
+    Let $\Sigma=\begin{bmatrix}
+        \Sigma_{X_1X_1} & \Sigma_{X_1X_2} & \Sigma_{X_1V} \\
+        \Sigma_{X_2X_1} & \Sigma_{X_2X_2} & \Sigma_{X_2V} \\
+        \Sigma_{VX_1} & \Sigma_{VX_2} & \Sigma_{VV}
+    \end{bmatrix}=\begin{bmatrix}
+        \Sigma_{11} & \Sigma_{12} \\
+        \Sigma_{21} & \Sigma_{VV}   
+    \end{bmatrix}$. By Schur's formula for block-matrix inversion, 
+    $\Theta=\Sigma^{-1}=\begin{bmatrix}
+        (\Sigma_{11}-\Sigma_{12}\Sigma_{VV}^{-1}\Sigma_{21})^{-1} & -(\Sigma_{11}-\Sigma_{12}\Sigma_{VV}^{-1}\Sigma_{21})^{-1}\Sigma_{12}\Sigma_{VV}^{-1} \\
+        -\Sigma_{VV}^{-1}\Sigma_{21}(\Sigma_{11}-\Sigma_{12}\Sigma_{VV}^{-1}\Sigma_{21})^{-1} & \Sigma_{VV}^{-1}+\Sigma_{VV}^{-1}\Sigma_{21}(\Sigma_{11}-\Sigma_{12}\Sigma_{VV}^{-1}\Sigma_{21})^{-1}\Sigma_{12}\Sigma_{VV}^{-1}
+    \end{bmatrix}$.
+
+    With the left-upper corner of $\Theta$ which is
+    \begin{align*}
+        (\Sigma_{11}-\Sigma_{12}\Sigma_{VV}^{-1}\Sigma_{21})^{-1} &= \bigg(\begin{bmatrix}
+            \Sigma_{X_1X_1} & \Sigma_{X_1X_2} \\
+            \Sigma_{X_2X_1} & \Sigma_{X_2X_2}
+        \end{bmatrix}-\begin{bmatrix}
+            \Sigma_{X_1V}\Sigma_{VV}^{-1}\Sigma_{VX_1} & \Sigma_{X_1V}\Sigma_{VV}^{-1}\Sigma_{VX_2} \\
+            \Sigma_{X_2V}\Sigma_{VV}^{-1}\Sigma_{VX_1} & \Sigma_{X_2V}\Sigma_{VV}^{-1}\Sigma_{VX_2}
+        \end{bmatrix}\bigg)^{-1} \\
+                &= \frac{1}{\text{det}}\begin{bmatrix}
+                    \Sigma_{X_2X_2}-\Sigma_{X_2V}\Sigma_{VV}^{-1}\Sigma_{VX_2} & -\Sigma_{X_2X_1}+\Sigma_{X_2V}\Sigma_{VV}^{-1}\Sigma_{VX_1} \\
+                    -\Sigma_{X_1X_2}+\Sigma_{X_1V}\Sigma_{VV}^{-1}\Sigma_{VX_2} & \Sigma_{X_1X_1}-\Sigma_{X_1V}\Sigma_{VV}^{-1}\Sigma_{VX_1}
+                \end{bmatrix} \\
+                &= \begin{bmatrix}
+                    \Theta_{11} & \Theta_{12} \\
+                    \Theta_{21} & \Theta_{22}
+                \end{bmatrix},
+    \end{align*}
+    we observe that Equation (\ref{eq: ch1_pcorrprf2}) is just $-\frac{\Theta_{12}}{\sqrt{\Theta_{11}\Theta_{22}}}$.
+    Since any $X_i$ and $X_j$ can be moved to the place of $X_1$ and $X_2$ by permutation, this completes the proof. 
+\end{proof}
+
+By the Proposition \ref{prop: ch1_pcorr}, a direct corollary of Theorem \ref{thm: ch1_conind} is obtained. 
+\begin{corollary}
+    $X_i$ and $X_j$ are conditionally independent given $V_{i,j}$ if and only if $\rho_{i,j|V_{i,j}}=\rho_{j,i|V_{i,j}}=0$.
+\end{corollary}

@@ -1,0 +1,456 @@
+\section{Method}
+
+Suppose we have a time series in $\mathbb{R}^d$ over a period of discrete times $t_1,\cdots,t_T$, 
+where for each time stamp we have $n_i$ observations. 
+We assume the time series is observed from a Gaussian multivariate random vector $X\sim\mathcal{N}(0,\Sigma(t))$. 
+To infer the dynamic network from the time series, 
+we aim at estimating the sparse inverse covariance matrices $\Theta=\{\Theta_1,\cdots,\Theta_T\}$ from observations. 
+This is achievable by minimizing the negative log-likelihood function with a temporal constraint and a sparsity penalty.
+Hallac et al. define the loss function by
+% \begin{equation*}
+%     \mathcal{L} = \sum_{i=1}^{T}\left(-l(\Theta_i) + \lambda\|\Theta_i\|_{\text{od}, 1}\right) + 
+%     \beta\cdot\left\{\begin{aligned}
+%         &\sum_{i=2}^{T}\psi(\Theta_i-\Theta_{i-1}) & \text{Synchronous Observations}\\
+%         &\sum_{i=2}^{T}\Delta_i\psi(\frac{\Theta_i-\Theta_{i-1}}{\Delta_i}) & \text{Asynchronous Observations}
+%     \end{aligned}\right.,
+% \end{equation*}
+\begin{equation}
+    \label{eq: ch1_TVGLloss}
+    \mathcal{L}_{\text{TVGL}} = \sum_{i=1}^{T}\left(-l(\Theta_i) + \lambda\|\Theta_i\|_{\text{od}, 1}\right) + \beta\sum_{i=2}^{T}\psi(\Theta_i-\Theta_{i-1}), 
+\end{equation}
+where $\lambda$, $\beta$ are hyperparameters, $\|\cdot\|_{\text{od}, 1}$ is off-diagonal 1-norm, 
+and $\psi(\cdot)$ is a convex penalty function, minimized at $\psi(0)$, 
+encouraging similarity between adjacent sparse inverse covariance matrices. 
+
+\subsection{Loss function of msTVGL}
+Denote the sample covariance matrix by $S$. 
+For each $t_i$, the negative log-likelihood function is given by 
+\begin{align}
+    \label{eq: ch1_loss}
+    -l(\Theta_i) &= -\log\left((2\pi)^{-\frac{n_id}{2}}|\Theta_i|^{\frac{n_i}{2}}\exp\left\{-\frac{1}{2}\sum_{j=1}^{n_i}x_j^T\Theta_ix_j\right\}\right) \notag \\
+               &= -\log((2\pi)^{-\frac{n_id}{2}}) - \frac{n_i}{2}\log(|\Theta_i|) +\frac{n_i}{2}\sum_{j=1}^{n_i}\text{Tr}(\frac{1}{n_i}x_j^T\Theta_ix_j) \notag \\
+               &= -\log((2\pi)^{-\frac{n_id}{2}}) - \frac{n_i}{2}\log(|\Theta_i|) +\frac{n_i}{2}\text{Tr}(\frac{1}{n_i}\sum_{j=1}^{n_i}x_jx_j^T\Theta_i) \notag \\
+               &= -\log((2\pi)^{-\frac{n_id}{2}}) - \frac{n_i}{2}\log(|\Theta_i|) +\frac{n_i}{2}\text{Tr}(S_i\Theta_i)
+\end{align}
+Minimizing negative log-likelihood function encourages $\Theta_i=S_i^{-1}$. 
+
+However, if for each time stamp there are multiple subjects contributing total observations, 
+the negative log-likelihood function may not accurate anymore. 
+Consider that we test on a certain type of cell in blood samples from multiple subjects. 
+In this situation, cells from different subjects compose the set of observations. 
+It is feasible to use the combined dataset to estimate the precision matrix but the heterogeneity between each subject isn't equally emphasized by the imbalanced sample sizes. 
+In addition, if we only observe several positive definite matrices for each time stamp, 
+we can't derive both sample size and the overall "sample covariance matrix". 
+Hence, we modify the negative log-likelihood part of the loss function (\ref{eq: ch1_loss}) by 
+using sample covariance matrices separately from different subjects while keeping a common precision matrix at each time stamp $t_i$,  
+as presented as follows. 
+\begin{align}
+    \label{eq: ch1_loss_modify1}
+    -l(\Theta_i) &= -\log((2\pi)^{-\frac{n_id}{2}}) - \frac{n_i}{2}\log(|\Theta_i|) +\frac{n_i}{2}\text{Tr}(S_i\Theta_i) \notag \\
+                 &= \sum_{k=1}^{N_i}-\log((2\pi)^{-\frac{n_{ik}d}{2}})-\frac{n_{ik}}{2}\log(|\Theta_i|)+\frac{n_{ik}}{2}\text{Tr}(S_{ik}\Theta_i),
+\end{align}
+where there are $N_i$ subjects and $\sum_{k=1}^{N_i}n_{ik}=n_i$.
+
+To reduce the influence of imbalanced sample sizes, 
+we further normalize (\ref{eq: ch1_loss_modify1}) by removing the sample sizes $n_{i1},\cdots,n_{iN_i}$. 
+This produces the final log-likelihood loss suitable for the multi-subjects case (up to a constant and scale): 
+\begin{align}
+    \label{eq: ch1_loss_modify1_normalized}
+    -l(\Theta_i) &= \sum_{k=1}^{N_i}-\log(|\Theta_i|)+\text{Tr}(S_{ik}\Theta_i) \notag \\
+                 &= -N_i\log(|\Theta_i|)+N_i\text{Tr}(\bar{S_i}\Theta_i), 
+\end{align}
+where $\bar{S_i}$ is the mean of sample covariances of all subjects $\frac{1}{N_i}\sum_{k=1}^{N_i}S_{ik}$. 
+Optimizing (\ref{eq: ch1_loss_modify1_normalized}) produces a precision matrix close to $\bar{S_i}^{-1}$, 
+which equally scales the heterogeneity between subjects.
+
+The spatial penalty function is given by the off-diagonal 1-norm of each precision matrix, 
+controlled by a penalty parameter $\lambda$, 
+which can be written explicitly by $\lambda\|\Theta_i\|_{\text{od},1}=\lambda\sum_{j,k:j\neq k}|\Theta_{j,k}|$. 
+It encourages the sparsity of the precision matrix.
+
+For temporal penalty function $\psi$, 
+Hallac et al.\cite{hallac2017networkinferencetimevaryinggraphical} proposed 5 choices, 
+which are element-wise $l_1$ penalty, group lasso $l_2$ penalty, Laplacian penalty, 
+$l_{\infty}$ penalty and row-column overlap penalty. 
+Here element-wise $l_1$ penalty $\psi(X)=\sum_{i,j}|X_{i,j}|$ 
+encourages the networks at adjacent time points to remain consistent on the majority of the edges, 
+while only changing on a few edges. 
+Group lasso $l_2$ penalty $\psi(X)=\sum_{j}\|[X]_j\|_2$ 
+leads to a complete reconfiguration of the entire network at a few specific time points, 
+when maintaining structural stability at the rest time points.
+Laplacian penalty $\psi(X)=\sum_{i,j}X_{i,j}^2$ is suitable for smooth time-varying dynamic 
+by allowing slight difference between adjacent time stamps and heavily punishing prominent differences. 
+$l_{\infty}$ penalty $\psi(X)=\sum_{j}(\max_i|X_{i,j}|)$ is designed for scenarios where change happens only by clusters
+because within the largest variation range of all the edges connected to a certain node, 
+all edges in this cluster can freely vary without incurring additional penalties.
+row-column overlap penalty $\psi(X)=\min_{V:V+V^T=X}\sum_{j}\|[V]_j\|_2$ is suitable for situations of repositioning of a single node to a new set of neighbors at each time stamp.
+As we especially focus on research background of time-varying trend of cell-cell communication and brain region interaction, 
+we discuss the most biologically meaningful temporal penalty types.
+
+Usually, the time-varying dynamic of cell-cell interaction networks exhibits phased changes. 
+Within each phase, the changes are smooth and continuous. 
+Between different phases, there are sudden changes in edges and possibly network reorganization.
+The reason is that those networks reflect the overall influence from 
+the gradual establishment of cell communication patterns during development like immune system maturation during adolescence, 
+the slow attenuation of communication intensity or the compensatory enhancement of specific pathways during aging, 
+as well as the sudden activation or inhibition of certain signaling axes during disease progression. 
+The change of brain structural connectivity network exhibits either a gradual smooth transition or sudden network reconfiguration.
+The biological progression includes a continuous but gradually slowing down process of myelination and pruning of fiber bundles (with smooth and continuous changes) from childhood to adulthood;
+possible relatively rapid global network reorganization before and after key developmental milestones (such as the maturation of language areas and prefrontal cortex functions).  
+In special cases, the brain may suffer from a global connectivity disruptions in the course of neurodegenerative diseases (such as Alzheimer's disease), manifested as phased disintegration of the network.
+
+Based on the aforementioned change characteristics of both types of networks, 
+this paper first of all suggests Laplacian penalty functions because it aligns with the smooth and gradual change of the two types of networks, 
+especially in studies with densely sampled time points.
+Moreover, the element-wise $l_1$ penalty is adopted considering that in both types of networks, 
+there are "switch-like" change events between a few key edges. 
+For instance, the activation of a specific signaling pathway leads to a significant increase in the communication probability between certain cell types, 
+or the sudden myelination of white matter tracts results in enhanced connectivity between certain brain regions.
+At last, group lasso $l_2$ penalty works in the study since it is able to sniff out the sudden transition of cell-cell interaction pattern during certain stage in development, 
+as well as to catch the large difference between networks when the gap between time points are huge, 
+for example in studies across very rough time labels like "neonate", "adolescent", "adult" and "the elder". 
+For the rest two penalty types $l_{\infty}$ and row-column overlap, 
+since the coordinated changes of edges within a node cluster 
+and the behavior of a single node reconnecting all edges at a single time point are extremely rare in cellular interaction networks and brain structural connection networks, 
+and may even lack clear biological mechanism explanations, 
+we do not intend to adopt them.
+
+The above discussion on the negative loss function, spatial penalty and temporal penalty gives the final loss function of msTVGL,
+as shown by (\ref{eq: ch1_lossmsTVGL})
+\begin{equation}
+    \label{eq: ch1_lossmsTVGL}
+    \mathcal{L}_{\text{msTVGL}} = \sum_{i=1}^{T}(-N_i\log(|\Theta_i|)+N_i\text{Tr}(\bar{S_i}\Theta_i) + \lambda\|\Theta_i\|_{\text{od},1}) +
+    \beta\sum_{i=2}^{T}\psi(\Theta_i-\Theta_{i-1}),
+\end{equation}
+where the subjects for all time points are $N_1,\cdots,N_T$ respectively, 
+and temporal penalty $\psi$ is chosen from $\psi(\Theta_i-\Theta_{i-1})=\left\{\begin{aligned}
+        &\sum_{j,k}|(\Theta_i-\Theta_{i-1})_{j,k}| & (\text{element-wise } l_1) \\
+        &\sum_{j}\|[\Theta_i-\Theta_{i-1}]_j\|_2 & (\text{group lasso } l_2) \\
+        &\sum_{j,k}(\Theta_i-\Theta_{i-1})^2_{j,k} & (\text{Laplacian})
+    \end{aligned}\right..$
+
+\subsection{ADMM based optimizing algorithm}
+Hallac et al.\cite{hallac2017networkinferencetimevaryinggraphical} proposed an ADMM based algorithm to minimize the loss function (\ref{eq: ch1_TVGLloss}) with proximal operators. 
+
+The proximal operator\cite{Parikh2014Proximal} of a convex function $f:\mathbb{R}^{m\times n}\mapsto\mathbb{R}\bigcup\{+\infty\}$ and a parameter $\eta\in\mathbb{R}$ is defined by 
+\begin{equation*}
+    \operatorname{prox}_{\eta f}(\mu):= \arg\min_{x\in\mathbb{R}^{m\times n}}(f(x)+\frac{1}{2\eta}\|x-\mu\|^2_F), \forall \mu\in\mathbb{R}^{m\times n}.
+\end{equation*}
+It's clear that $\operatorname{prox}_{\eta f}:\mathbb{R}^{m\times n}\mapsto\mathbb{R}$ is a minimization task with the trade-off between a function and a Frobenius distance. 
+ADMM is an optimizing framework designed for separable convex optimization problems with linear constraints\cite{Boyd2011distributed}, 
+i.e. optimization problems with a form of 
+\begin{equation*}
+    \min_{x,z} f(x)+g(z) \text{ s.t. } Ax+Bz=c, \text{ for convex }f,g.
+\end{equation*}
+It introduces a dual variable $u$ to construct an augmented Lagrangian function
+\begin{equation*}
+    L_{\rho}(x,z,y)=f(x)+g(z)+\left\langle u,Ax+Bz-c\right\rangle_{F}+\frac{\rho}{2}\|Ax+Bz-c\|_F^2, 
+\end{equation*}
+where $\|\cdot\|_F$ is Frobenius norm and $\rho>0$ is the ADMM penalty parameter. 
+The variables are solved by an algorithm where at $k$-th step the updating rule is
+\begin{align}
+    x^{(k+1)} &:= \arg\min_x L_{\rho}(x,z^{(k)},u^{(k)}) \label{eq: ch1_ADMMupdating1} \\
+    z^{(k+1)} &:= \arg\min_z L_{\rho}(x^{(k+1)},z,u^{(k)}) \label{eq: ch1_ADMMupdating2} \\
+    u^{(k+1)} &:= u^k + \rho(Ax^{(k+1)}+Bz^{(k+1)}-c). \label{eq: ch1_ADMMupdating3}
+\end{align}
+
+To fit in the ADMM framework, Hallac et al. gave the equivalent optimization task of (\ref{eq: ch1_TVGLloss}) by 
+introducing a consensus variable $Z=\{Z_0,Z_1,Z_2\}$ such that it forms three restrictive conditions $Z_0=\Theta$, 
+$Z_1=\{\Theta_1,\cdots,\Theta_{T-1}\}$, $Z_2=\{\Theta_2,\cdots,\Theta_T\}$. 
+Then they used the fact that the minimization tasks (\ref{eq: ch1_ADMMupdating1}) and (\ref{eq: ch1_ADMMupdating2}) are equivalent to several proximal operators, 
+which have closed-forms, to derive the analytical form of the updating rule.
+Since the loss function of msTVGL (\ref{eq: ch1_lossmsTVGL}) differs from (\ref{eq: ch1_TVGLloss}) only by the negative log-likelihood, 
+we directly implement the updating rule of the consensus variable $Z$ and dual variable $U$ by Hallac et al., 
+and derive the new closed-form updating rule of $\Theta$.
+
+\subsubsection{Equivalent optimization task and augmented Lagrangian function}
+After introducing the consensus variables $Z$, the optimization task of (\ref{eq: ch1_lossmsTVGL}) is equivalent to
+\begin{align*}
+    & \min_{\Theta, Z_0, Z_1, Z_2}\sum_{i=1}^{T}\left(-N_i\log(|\Theta_i|)+N_i\text{Tr}(\bar{S_i}\Theta_i) + \lambda\|Z_{i,0}\|_{\text{od}, 1}\right) + \beta\sum_{i=1}^{T-1}\psi(Z_{i,2}-Z_{i,1}) \\
+    & \text{Subject to } Z_{i,0}=\Theta_i,\ (Z_{j,1}, Z_{j,2})=(\Theta_j,\Theta_{j+1}),\ 1\leq i\leq T,\ 1\leq j\leq T-1.
+\end{align*}
+The augmented Lagrangian function is given by 
+\begin{align*}
+    L_p(\Theta,Z,\tilde{U}) =& \sum_{i=1}^{T}\left(-N_i\log(|\Theta_i|)+N_i\text{Tr}(\bar{S_i}\Theta_i) + \lambda\|Z_{i,0}\|_{\text{od}, 1}\right) + \beta\sum_{i=1}^{T-1}\psi(Z_{i,2}-Z_{i,1}) \\
+                                  &+ \frac{\rho}{2}\sum_{i=1}^{T}(\|\Theta_i-Z_{i,0}+\frac{1}{\rho}\tilde{U}_{i,0}\|_F^2-\|\frac{1}{\rho}\tilde{U}_{i,0}\|_F^2) \\
+                                  &+ \frac{\rho}{2}\sum_{i=1}^{T-1}(\|\Theta_{i}-Z_{i,1}+\frac{1}{\rho}\tilde{U}_{i,1}\|_F^2-\|\frac{1}{\rho}\tilde{U}_{i,1}\|_F^2+\|\Theta_{i+1}-Z_{i,2}+\frac{1}{\rho}\tilde{U}_{i,2}\|_F^2-\|\frac{1}{\rho}\tilde{U}_{i,2}\|_F^2), 
+\end{align*}
+where $\tilde{U}=(\underbrace{(\tilde{U}_{1,0},\cdots,\tilde{U}_{T,0})}_{\tilde{U}_0},\underbrace{(\tilde{U}_{1,1},\cdots,\tilde{U}_{T-1,1})}_{\tilde{U}_1},\underbrace{(\tilde{U}_{1,2},\cdots,\tilde{U}_{T-1,2})}_{\tilde{U}_2})$
+is the dual variable.
+For simplicity, we denote $\frac{1}{\rho}\tilde{U}$ by $U$ and update it instead of $\tilde{U}$ in the algorithm.
+
+\subsubsection{Updating $\Theta$}
+
+Suppose at $k+1$-th step we have $Z^{(k)}$, $U^{(k)}$ and use them to update $\Theta^{(k+1)}$.
+For simplicity, we denote $Z_{i,j}-U_{i,j}$ by $B_{i,j}$.
+
+\textbf{i) For $i=2,\cdots,T-1$:} 
+\begin{align*}
+    \Theta_i^{(k+1)}&=\arg\min_{\Theta_i}-N_i\log(|\Theta_i|)+N_i\text{Tr}(\bar{S_i}\Theta_i)+\frac{\rho}{2}\|\Theta_i-B_{i,0}^{(k)}\|_F^2+\frac{\rho}{2}\|\Theta_i-B_{i,1}^{(k)}\|_F^2+\frac{\rho}{2}\|\Theta_{i}-B_{i-1,2}^{(k)}\|_F^2 \\
+                    &=\arg\min_{\Theta_i}-N_i\log(|\Theta_i|)+N_i\text{Tr}(\bar{S_i}\Theta_i)+\frac{3\rho}{2}\left(\|\Theta_i\|_F^2-2\left\langle \Theta_i,\frac{1}{3}(B_{i,0}^{(k)}+B_{i,1}^{(k)}+B_{i-1,2}^{(k)})\right\rangle_F\right) + \underbrace{C(B_{i,0}^{(k)},B_{i,1}^{(k)},B_{i-1,2}^{(k)})}_{\text{Irrelevant to }\Theta_i} \\
+                    &=\arg\min_{\Theta_i}-N_i\log(|\Theta_i|)+N_i\text{Tr}(\bar{S_i}\Theta_i)+\frac{1}{2\frac{1}{3\rho}}\|\Theta_i-A_i^{(k)}\|_F^2 + \underbrace{C'(B_{i,0}^{(k)},B_{i,1}^{(k)},B_{i-1,2}^{(k)})}_{\text{Irrelevant to }\Theta_i}, 
+\end{align*}
+where $A_i^{(k)}:=\frac{1}{3}(B_{i,0}^{(k)}+B_{i,1}^{(k)}+B_{i-1,2}^{(k)})$.
+Hence, $\Theta_i^{(k+1)}=\operatorname{prox}_{\frac{1}{3\rho}(-N_i\log|\cdot|+N_i\text{Tr}(\bar{S}_i\cdot))}(A_i^{(k)})$, 
+which has a closed-form expression. 
+In fact, by setting gradient with respect to $\Theta_i$ to 0, we have 
+\begin{align}
+    \label{eq: ch1_Thetaupdate1}
+    0 &= -N_i\Theta_i^{-1}+N_i\bar{S}_i+3\rho(\Theta_i-A_i^{(k)}) \notag \\
+   \Longleftrightarrow -N_i\Theta_i^{-1} +3\rho\Theta_i &= 3\rho A_i^{(k)}-N_i\bar{S}_i \notag \\
+   \Longleftrightarrow 0 &= \Theta_i^2 + (\frac{N_i}{3\rho}\bar{S}_i-A_i^{(k)})\Theta_i - \frac{N_i}{3\rho}I.
+\end{align}
+Denote the eigenvalue decomposition for $\frac{N_i}{3\rho}\bar{S}_i-A_i^{(k)}$ by $Q_iD_iQ_i^T$, 
+where $Q_i$ is an orthonormal matrix of eigenvectors and $D_i$ is a diagonal matrix of eigenvalues. 
+Then (\ref{eq: ch1_Thetaupdate1}) equals 
+\begin{align}
+    \label{eq: ch1Thetaupdate2}
+    0 &= \Theta_i^2 + Q_iD_iQ_i^T\Theta_i - \frac{N_i}{3\rho}I \notag \\
+    Q_i(\frac{1}{4}D_i^2+\frac{N_i}{3\rho}I)Q_i^T &= (\Theta_i+\frac{1}{2}Q_iD_iQ_i^T)^2.
+\end{align}
+By the positive definiteness of $\Theta_i$, 
+we have $\Theta_i^{(k+1)}:=Q_i(-\frac{1}{2}D_i+\sqrt{\frac{1}{4}D_i^2+\frac{N_i}{3\rho}})Q_i^T$ by (\ref{eq: ch1Thetaupdate2}).
+
+\vspace{1cm}
+\textbf{ii) For $i=1$:} 
+\begin{align*}
+    \Theta_1^{(k+1)}&=\arg\min_{\Theta_1}-N_1\log(|\Theta_1|)+N_1\text{Tr}(\bar{S_1}\Theta_1)+\frac{\rho}{2}\|\Theta_1-B_{1,0}^{(k)}\|_F^2+\frac{\rho}{2}\|\Theta_1-B_{1,1}^{(k)}\|_F^2 \\
+                    &=\arg\min_{\Theta_1}-N_1\log(|\Theta_1|)+N_1\text{Tr}(\bar{S_1}\Theta_1)+\frac{1}{2\frac{1}{2\rho}}\|\Theta_1-A_1^{(k)}\|_F^2 + \underbrace{C(B_{1,0}^{(k)},B_{1,1}^{(k)})}_{\text{Irrelevant to }\Theta_1}, 
+\end{align*}
+where $A_1^{(k)}:=\frac{1}{2}(B_{1,0}^{(k)}+B_{1,1}^{(k)})$. 
+Hence, $\Theta_1^{k+1}=\operatorname{prox}_{\frac{1}{2\rho}(-N_1\log|\cdot|+N_1\text{Tr}(\bar{S}_1\cdot))}(A_1^{(k)})$, 
+which has a closed-form expression $\Theta_1^{k+1}:=Q_1(-\frac{1}{2}D_1+\sqrt{\frac{1}{4}D_1^2+\frac{N_1}{2\rho}})Q_1^T$, 
+with eigenvalue decomposition $\frac{N_1}{2\rho}\bar{S}_1-A_1^{(k)}:=Q_1D_1Q_1^T$.
+
+\vspace{1cm}
+\textbf{iii) For $i=T$:}
+\begin{align*}
+    \Theta_T^{(k+1)}&=\arg\min_{\Theta_T}-N_T\log(|\Theta_T|)+N_T\text{Tr}(\bar{S_T}\Theta_T)+\frac{\rho}{2}\|\Theta_T-B_{T,0}^{(k)}\|_F^2+\frac{\rho}{2}\|\Theta_T-B_{T-1,2}^{(k)}\|_F^2 \\
+                    &=\arg\min_{\Theta_T}-N_T\log(|\Theta_T|)+N_T\text{Tr}(\bar{S_T}\Theta_T)+\frac{1}{2\frac{1}{2\rho}}\|\Theta_T-A_T^{(k)}\|_F^2+\underbrace{C(B_{T,0}^{(k)},B_{T-1,2}^{(k)})}_{\text{Irrelevant to }\Theta_T},
+\end{align*}
+where $A_T^{(k)}:=\frac{1}{2}(B_{T,0}^{(k)}+B_{T-1,2}^{(k)})$. 
+Hence, $\Theta_T^{k+1}=\operatorname{prox}_{\frac{1}{2\rho}(-N_T\log|\cdot|+N_T\text{Tr}(\bar{S}_T\cdot))}(A_T^{(k)})$, 
+which has a closed-form expression $\Theta_T^{k+1}:=Q_T(-\frac{1}{2}D_T+\sqrt{\frac{1}{4}D_T^2+\frac{N_T}{2\rho}})Q_T^T$, 
+with eigenvalue decomposition $\frac{N_T}{2\rho}\bar{S}_T-A_T^{(k)}:=Q_TD_TQ_T^T$.
+
+\subsubsection{Updating $Z$}
+We implement directly the updating step of $Z$ by Hallac et al.\cite{hallac2017networkinferencetimevaryinggraphical}. 
+To ensure the completeness of the content, 
+we provide the derivations of the parts that were omitted and display the results that have already been shown in the original paper.
+Suppose at $k+1$-th step we have $\Theta^{(k+1)}$, $U^{(k)}$ and use them to update $Z^{(k+1)}$. 
+
+\textbf{Part i) Updating $Z_0$:}
+\begin{align*}
+    Z_{i,0}^{(k+1)}&=\arg\min_{Z_{i,0}}\lambda\|Z_{i,0}\|_{\text{od,1}}+\frac{\rho}{2}\|Z_{i,0}-\Theta_i^{(k+1)}-U_{i,0}^{(k)}\|_F^2 \\
+                   &=\operatorname{prox}_{\frac{\lambda}{\rho}\|\cdot\|_{\text{od,1}}}(\Theta_i^{(k+1)}+U_{i,0}^{(k)}).
+\end{align*}
+To get the explicit expression of $\operatorname{prox}_{\frac{\lambda}{\rho}\|\cdot\|_{\text{od,1}}}(\Theta_i^{(k+1)}+U_{i,0}^{(k)})$, 
+we derive by gradient. 
+In fact, setting the gradient with respect to $Z_{i,0}$ to 0, 
+we have 
+\begin{align*}
+    0&=\nabla_{Z_{i,0}}\|Z_{i,0}\|_{\text{od,1}} + \frac{\rho}{\lambda}(Z_{i,0}-(\Theta_i^{(k+1)}+U_{i,0}^{(k)})) \\
+    \Longleftrightarrow Z_{i,0}^{(k+1)}+\frac{\lambda}{\rho}\nabla_{Z_{i,0}}\|Z_{i,0}^{(k+1)}\|_{\text{od,1}} &= \Theta_i^{(k+1)}+U_{i,0}^{(k)}.
+\end{align*}
+For entry $Z_{i,0}^{(k+1)}(j,l)$, $j\neq l$, we denote the sign of it by $\text{sgn}(Z_{i,0}^{(k+1)}(j,l))$. 
+Then 
+\begin{equation*}
+    \left\{\begin{aligned}
+        \text{sgn}(Z_{i,0}^{(k+1)}(j,l))=-1&:\ Z_{i,0}^{(k+1)}(j,l)=\underbrace{\frac{\lambda}{\rho}}_{>0}+(\Theta_i^{(k+1)}+U_{i,0}^{(k)})(j,l)<0 \\
+        \text{sgn}(Z_{i,0}^{(k+1)}(j,l))= 1&:\ Z_{i,0}^{(k+1)}(j,l)=\underbrace{-\frac{\lambda}{\rho}}_{<0}+(\Theta_i^{(k+1)}+U_{i,0}^{(k)})(j,l)>0
+    \end{aligned}\right.\Longrightarrow
+    \left\{\begin{aligned}
+        \text{sgn}((\Theta_i^{(k+1)}+U_{i,0}^{(k)})(j,l)) &= \text{sgn}(Z_{i,0}^{(k+1)}(j,l)) \\
+        \bigg|(\Theta_i^{(k+1)}+U_{i,0}^{(k)})(j,l)\bigg| &> \frac{\lambda}{\rho}
+    \end{aligned}\right.,
+\end{equation*}
+and by the definition of subgradient\footnote{The subgradient of $f:\mathbb{R}^n$ is $\partial f:=\{g:f(y)\geq f(x)+g^T(y-x),\forall y\in\mathbb{R}^n\}$.}
+\begin{equation*}
+    Z_{i,0}^{(k+1)}(j,l)=0:\ \nabla_{Z_{i,0}^{(k+1)}}\|Z_{i,0}\|_{\text{od,1}}=\frac{\rho}{\lambda}(\Theta_i^{(k+1)}+U_{i,0}^{(k)})\in[-1,1]\Longrightarrow(\Theta_i^{(k+1)}+U_{i,0}^{(k)})(j,l)\in[-\frac{\lambda}{\rho},\frac{\lambda}{\rho}].
+\end{equation*}
+Therefore, the closed-form expression of $Z_{i,0}^{(k+1)}$ is given by 
+\begin{equation*}
+    Z_{i,0}^{(k+1)}(j,l)=\left\{\begin{aligned}
+        0,\ &\bigg|(\Theta_i^{(k+1)}+U_{i,0}^{(k)})(j,l)\bigg|\leq\frac{\lambda}{\rho},\ j\neq l \\
+        \text{sgn}((\Theta_i^{(k+1)}+U_{i,0}^{(k)})(j,l))(|(\Theta_i^{(k+1)}+U_{i,0}^{(k)})(j,l)|-\frac{\lambda}{\rho}),\ &\bigg|(\Theta_i^{(k+1)}+U_{i,0}^{(k)})(j,l)\bigg|>\frac{\lambda}{\rho},\ j\neq l \\
+        (\Theta_i^{(k+1)}+U_{i,0}^{(k)})(j,l),\ j=l
+    \end{aligned}\right..
+\end{equation*}
+
+\vspace{1cm}
+\textbf{Part ii) Jointly updating $Z_1,Z_2$:}
+\begin{align*}
+    Z_{i,1}^{(k+1)}, Z_{i,2}^{(K+1)}&=\arg\min_{Z_{i,1}, Z_{i,2}}\beta\psi(Z_{i,2}-Z_{i,1})+\frac{\rho}{2}\|Z_{i,1}-\Theta_i^{(k+1)}-U_{i,1}^{(k)}\|_F^2+\frac{\rho}{2}\|Z_{i,2}-\Theta_{i+1}^{(k+1)}-U_{i+1,2}^{(k)}\|_F^2 \\
+                                    &=\arg\min_{Z_{i,1}, Z_{i,2}}\beta\psi([-I\ I]\begin{bmatrix}Z_{i,1}\\Z_{i,2}\end{bmatrix})+\frac{\rho}{2}\bigg\|\begin{bmatrix}Z_{i,1}-\Theta_i^{(k+1)}-U_{i,1}^{(k)}\\Z_{i,2}-\Theta_{i+1}^{(k+1)}-U_{i+1,2}^{(k)}\end{bmatrix}\bigg\|_F^2 \\
+    &=\operatorname{prox}_{\frac{\beta}{\rho}\psi([-I\ I]\cdot)}(\begin{bmatrix}\Theta_i^{(k+1)}+U_{i,1}^{(k)}\\\Theta_{i+1}^{(k+1)}+U_{i+1,2}^{(k)}\end{bmatrix}) \\
+    \Longrightarrow \begin{bmatrix}Z_{i,1}^{(k+1)}\\ Z_{i,2}^{(k+1)}\end{bmatrix} &=\frac{1}{2}\begin{bmatrix}\Theta_i^{(k+1)}+\Theta_{i+1}^{(k+1)}+U_{i,1}^{(k)}-U_{i+1,2}^{(k)}\\\Theta_i^{(k+1)}+\Theta_{i+1}^{(k+1)}+U_{i,1}^{(k)}-U_{i+1,2}^{(k)}\end{bmatrix}+\frac{1}{2}\begin{bmatrix}-\operatorname{prox}_{\frac{2\beta}{\rho}\psi}([\Theta_{i+1}^{(k+1)}-\Theta_i^{(k+1)}+U_{i+1,2}^{(k)}-U_{i,1}^{(k)}])\\\operatorname{prox}_{\frac{2\beta}{\rho}\psi}([\Theta_{i+1}^{(k+1)}-\Theta_i^{(k+1)}+U_{i+1,2}^{(k)}-U_{i,1}^{(k)}])\end{bmatrix},
+\end{align*}
+where the last step uses the property that if $f(x)=g(Cx)$, $CC^T=\frac{1}{\alpha}I$, 
+then $\operatorname{prox}_f(x)=(I-\alpha C^TC)x+\alpha C^T\operatorname{prox}_{\frac{1}{\alpha}g}(x)$.
+
+Hallac et al. used the property that if $f$ is block separable, i.e.$f(x)=\sum_{j}f_j(x_j)$, then $(\operatorname{prox}_f(y))_j=\operatorname{prox}_{f_j}(y_j)$, 
+to give the closed-form expression of $E^{(k+1)}:=\operatorname{prox}_{\frac{2\beta}{\rho}\psi}([\Theta_{i+1}^{(k+1)}-\Theta_i^{(k+1)}+U_{i+1,2}^{(k)}-U_{i,1}^{(k)}])$. 
+We denote $\Theta_{i+1}^{(k+1)}-\Theta_i^{(k+1)}+U_{i+1,2}^{(k)}-U_{i,1}^{(k)}$ by $A^{(k)}$ for simplicity.
+
+\textbf{a)} When $\psi(\cdot):=\sum_{ij}|(\cdot)_{ij}|=\|\cdot\|_1$, the element-wise $l_1$ penalty, 
+$E^{(k+1)}=\operatorname{prox}_{\frac{2\beta}{\rho}\|\cdot\|_1}(A^{(k)})$.
+Following the derivation of the updating rule of $Z_{i,0}$, we have
+$E^{(k+1)}_{ij}=\left\{\begin{aligned}
+    0, &\bigg|A^{(k)}_{ij}\bigg|\leq\frac{2\beta}{\rho} \\
+    \text{sgn}(A^{(k)}_{ij})(|A^{(k)}_{ij}|-\frac{2\beta}{\rho}), &\bigg|A^{(k)}_{ij}\bigg|>\frac{2\beta}{\rho}
+\end{aligned}\right.$.
+
+\textbf{b)} When $\psi(\cdot):=\sum_{j}\|[(\cdot)_j]\|_2$, the group lasso $l_2$ penalty,
+$[E^{(k+1)}]_j=\operatorname{prox}_{\frac{2\beta}{\rho}\|(\cdot)_j\|_2}([A]_j)=\arg\min_{[E]_j}\|[E]_j\|_2+\frac{1}{2\frac{2\beta}{\rho}}\|[E]_j-[A]_j\|_F^2$. 
+The setting gradient with respect to $[E]_j$ to 0 produces 
+\begin{equation}
+    \label{eq: ch1_gradientproxl2penalty}
+    \frac{2\beta}{\rho}\nabla_{[E]_j}\|[E^{(k+1)}]_j\|_2+[E^{(k+1)}]_j=[A]_j. 
+\end{equation}
+If $[E]_j=0$, then by the definition of subgradient, $\nabla_{[E]_j}\|[E^{(k+1)}]_j\|_2=\{v:\|v\|_2\leq 1\}$, 
+which means $[A]_j\in\{v:\|v\|_2\leq \frac{2\beta}{\rho}\}$.
+If $[E]_j\neq 0$, then by (\ref{eq: ch1_gradientproxl2penalty})
+\begin{align*}
+    (\frac{2\beta}{\rho}\frac{1}{\|[E^{(k+1)}]_j\|_2}+1)[E^{(k+1)}]_j&=[A]_j \\
+    \Longrightarrow\frac{2\beta}{\rho}+\|[E^{(k+1)}]_j\|_2&=\|[A]_j\|,
+\end{align*}
+which implies $[E^{(k+1)}]_j:=(1-\frac{2\beta}{\rho}\frac{1}{\|[A]_j\|_2})[A]_j$ is a solution.
+Hence, $[E^{(k+1)}]_j=\left\{\begin{aligned}
+    0, & \|[A]_j\|_2\leq\frac{2\beta}{\rho} \\
+    (1-\frac{2\beta}{\rho}\frac{1}{\|[A]_j\|_2})[A]_j, &\|[A]_j\|_2>\frac{2\beta}{\rho}
+\end{aligned}\right.$.
+
+\textbf{c)} When $\psi(\cdot):=\sum_{ij}|(\cdot)|^2=\|(\cdot)\|^2_F$, the Laplacian penalty, 
+we have $E^{(k+1)}_{ij}=\operatorname{prox}_{\frac{2\beta}{\rho}|\cdot|^2}(A^{(k)}_{ij})=\arg\min_{E_{ij}}|E_{ij}|^2+\frac{1}{2\frac{2\beta}{\rho}}(E_{ij}-A^{(k)}_{ij})^2$, 
+which is just $E^{(k+1)}_{ij}:=\frac{1}{1+\frac{4\beta}{\rho}}A^{(k)}_{ij}$.
+
+\subsubsection{Updating $U$} 
+The updating rule of $U$ at $k+1$-th step follows from (\ref{eq: ch1_ADMMupdating3}), 
+which is
+\begin{equation*}
+    U^{(k+1)}=\begin{bmatrix}U^{(k+1)}_0\\U^{(k+1)}_1\\U^{(k+1)}_2\end{bmatrix}:=
+    \begin{bmatrix}U^{(k)}_0\\U^{(k)}_1\\U^{(k)}_2\end{bmatrix} + 
+    \begin{bmatrix}
+        \Theta^{(k+1)}-Z^{(k+1)}_0 \\
+        \Theta^{(k+1)}\backslash\{\Theta^{(k+1)}_{T-1}\}-Z^{(k+1)}_1 \\
+        \Theta^{(k+1)}\backslash\{\Theta^{(k+1)}_1\}-Z^{(k+1)}_2
+    \end{bmatrix}.
+\end{equation*}
+Recall that $U=\frac{1}{\rho}\tilde{U}$, where $\tilde{U}$ is the dual variable, 
+the ADMM penalty parameter $\rho$ is dropped on the both sides of the updating equation. 
+
+\subsection{Hyperparameters}
+There are two positive hyperparameters controlling penalty strength. 
+For sparsity penalty $\lambda\|\Theta\|_{\text{od}, 1}$, 
+each off-diagonal element $x$ has gradient\footnote{Subgradient at $x=0$ is set to 0 but not $[-\lambda,\lambda]$.}
+\begin{equation*}
+    \left\{\begin{aligned}
+        &\lambda, x>0 \\
+        &0, x=0 \\
+        -&\lambda, x<0
+    \end{aligned}\right..
+\end{equation*}
+Since when optimizing convex penalty terms we expect zero gradients, 
+the algorithm will push off-diagonal elements to zero hard as $\lambda$ gets large, 
+and this result in a very sparse estimated inverse covariance matrix. 
+When $\lambda$ is small, we expect $\Theta$ better matches the empirical data, 
+but will lead to very dense networks, 
+which are less interpretable and often overfit. 
+
+This can be shown by gradient. 
+In fact, when we set temporal penalty to zero. 
+The gradient\footnote{Calculate by Fr\'echet derivative.} of the loss function (\ref{eq: ch1_loss_modify1_normalized}) plus the spatial penalty with respect to $\Theta_i$ is given by 
+\begin{align*}
+    \nabla_{\Theta_i}(-l(\Theta_i)+\lambda\|\Theta\|_{\text{od,1}}) &= \nabla_{\Theta_i}\left(-N_i\log(|\Theta_i|)+N_i\text{Tr}(\bar{S}_i\Theta_i) + \lambda\|\Theta_i\|_{\text{od}, 1}\right) \\
+                                  &= -N_i\Theta_i^{-1} + N_i\bar{S}_i + (\pm\lambda)_{\text{od}},
+\end{align*}
+where $(\pm\lambda)_{\text{od}}$ represents a square matrix on $\mathbb{R}^{d\times d}$ with 0 diagonal and $\pm\lambda$ filling its off-diagonal. 
+That 0 gradient is equivalent to $\Theta_i^{-1}=\bar{S}_i+\frac{1}{N_i}(\pm\lambda)_{\text{od}}$  
+clarifies the influence of $\lambda$ on the deviation of estimated precision matrix from $\bar{S}_i^{-1}$.
+In addition, the magnitude of $\lambda$ is associated with subject number $N_i$. 
+If subject numbers are extremely imbalanced for all time points, 
+a common sparsity penalty will cause over penalized precision matrices at time stamps with very few subjects. 
+However, since for a real dataset the subject numbers usually don't vary drastically across all time points, 
+this is not a problem that should be especially emphasized. 
+In fact, the problem of imbalanced observations must be aware of in the original TVGL, 
+because the gradient with respect to $\Theta_i$ of (\ref{eq: ch1_loss}) plus the spatial penalty gives the relationship $\Theta_i^{-1}=S_i+\frac{2}{n_i}(\pm\lambda)_{\text{od}}$. 
+Unlike subject numbers, the sample numbers tend to be extremely unequal for different time points, 
+whereby over penalized precision matrices are produced. 
+Hence, the loss function of msTVGL (\ref{eq: ch1_lossmsTVGL}) helps to alleviate this phenomena. 
+
+For temporal penalty term, $\beta$ controls the transition between adjacent estimated inverse covariance matrices. 
+Small $\beta$ will lead to fluctuating $\Theta$ between time stamps 
+while large $\beta$ makes transition smooth. 
+As $\beta\rightarrow\infty$, 
+the problem becomes a static graphical lasso problem since a constant $\Theta$ is the solution.
+
+\subsection{Hyperparameter selection}
+To generate an interpretable and biologically meaningful result, 
+the algorithm must assign the estimated precision matrices a rational sparsity to highlight significant edges and avoid learning too many noises from observations. 
+In addition, the temporal smoothness penalty must be given a proper strength to maintain consecution between adjacent time stamps. 
+To achieve this, we introduce the average degree of nodes, Jaccard similarity of adjacent graphs and temporal deviation ratios as standards to restrict the two penalty coefficients. 
+
+The average degree of nodes in a graph is defined by the mean number of edges connected to each node. 
+Suppose there are $L$ edges in the graph and $p$ nodes, for an undirected graph, 
+the average degree is given by 
+\begin{equation*}
+    \text{AD} = \frac{2L}{p}, 
+\end{equation*}
+where the coefficient 2 is due to each pair is checked twice by the edge. 
+This measure represents the number of biologically meaningful edges in an interaction network. 
+Usually, we set a threshold by prior knowledge and perceive entries with absolute values larger than this threshold in a precision matrix to be biologically 
+meaningful edges. 
+For different biologically backgrounds, the range of acceptable average degree varies, 
+which also requires prior knowledge to determine.
+
+The Jaccard similarity index measures the similarity between two sets. 
+In the graph connectivity perspective, it represents the overlap rate of the two adjacent edge sets. 
+Suppose $E_i$ and $E_{i+1}$ are two edge sets of the two graphs at adjacent time stamps $i$ and $i+1$, 
+their Jaccard similarity index is given by 
+\begin{equation*}
+    J(i,i+1) = \frac{|E_i\bigcap E_{i+1}|}{|E_i\bigcup E_{i+1}|}.
+\end{equation*} 
+The Jaccard similarity index lies in $[0,1]$. 
+When $J(i,i+1)$ is almost 1, the adjacent graphs are almost identical which implies a relatively strong temporal smoothness penalty. 
+When $J(i,i+1)$ is close to 0, there are almost no shared edges between the two graphs. 
+The range of Jaccard similarity varies a lot depending on the biological context, 
+which need strong prior knowledge to set.
+
+The temporal deviation ratio describes the sharp transitions between graphs. 
+It is calculated by the average difference of two adjacent precision matrices in Frobenius norm. 
+For precision matrices $\Theta_i$ and $\Theta_{i+1}$, the temporal deviation ratio at time shift $i\rightarrow i+1$ among $T$ time stamps is given by
+\begin{equation*}
+    \text{TDR}(i, i+1) = \frac{\|\Theta_{i+1}-\Theta_i\|_F}{\sum_{t=1}^{T-1}\|\Theta_{t+1}-\Theta_{t}\|_F}.
+\end{equation*} 
+We consider the time shift with a temporal deviation ratio above the $1.25$ times of the average a sharp transition. 
+
+We choose the acceptable hyperparameter combinations by making sure
+i) the average degree is within the required range which is featured by minimal and maximal acceptable percentages of node number; 
+ii) the average Jaccard similarity lies in the satisfactory range $[\text{AD}_{l},\text{AD}_u]$;
+iii) the temporal deviation ratio displays the least but at least 1 sharp transitions among all the attempts. 
+
+The selection procedure is shown in Algorithm \ref{alg: ch1_hyperparametersel}. 
+
+\begin{algorithm}
+    \caption{Hyperparameter selection with warm start}
+    \begin{algorithmic}
+        \State 1) $S_{\lambda}\longleftarrow$ Searching space of $\lambda$.
+        \State 2) With hyperparameter combination $(\lambda, \beta)$:
+        \State \quad 2a) $\text{AD}_{\lambda,\beta}\longleftarrow$ Mean value of average degrees of all precision matrices at all time stamps.
+        \State \quad 2b) $\text{TDR}_{\lambda,\beta}\longleftarrow$ Temporal deviation ratios of all precision matrices at all time stamps.
+        \State \quad 2c) $\text{ST}_{\lambda,\beta}\longleftarrow$ Sharp transition numbers. 
+        \State \quad 2d) $J_{\lambda,\beta}\longleftarrow$ Mean value of Jaccard similarities of all precision matrices at all time stamps.
+        \State 3) $\text{AD}_{\text{min}}, \text{AD}_{\text{max}}\longleftarrow$ $\text{min}\%, \text{max}\%$ percentiles of node number. 
+        \For{$\lambda, i\in \text{Enumerate}(S_{\lambda})$}
+            \For{$\beta\in S_{\lambda}[0:i+1]$}
+            \State a) Train model with $(\lambda, \beta)$.
+            \State b) Compute $\text{AD}_{\lambda,\beta}$, $\text{TDR}_{\lambda,\beta}$, $J_{\lambda,\beta}$
+            \EndFor
+            \If{$\text{AD}_{\lambda^*,\beta^*}\in[\text{AD}_{\text{min}}, \text{AD}_{\text{max}}]$, $\text{ST}_{\lambda^*,\beta^*}=\arg\min_{\lambda,\beta}\{\text{ST}_{\lambda,\beta}>0\}$, $J_{\lambda^*,\beta^*}\in[\text{AD}_{l},\text{AD}_u]$}
+                \State Accept $(\lambda^*, \beta^*)$
+            \EndIf
+        \EndFor
+        \State \Return All accepted hyperparameters
+    \end{algorithmic}
+    \label{alg: ch1_hyperparametersel}
+\end{algorithm}
