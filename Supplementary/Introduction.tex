@@ -1,0 +1,45 @@
+\section{Multi-subjects Time-varying graphical Lasso}
+
+A network is composed of a group of nodes connected to each other by edges. 
+Whether two nodes are connected or not depends on their dependence conditional on other nodes.
+This is straightforward because an edge only reflects the relationship between two nodes regardless of the states of the rest. 
+For Gaussian observations, a direct statistic showing this conditional dependence is the precision matrix, i.e. the inverse covariance matrices, 
+whereby two nodes are conditionally independent to each other if and only if their corresponding precision matrix entries are zero\footnote{See Subsection \ref{subsec: pcorrandprec}}.
+Based on this property, 
+Hallac et al.\cite{hallac2017networkinferencetimevaryinggraphical} proposed Time-varying graphical lasso (TVGL).  
+This is a method fully leveraging the time series observations i.i.d. from $\mathcal{N}(0,\Sigma(t))$ at different time stamps $t_1,\cdots,t_n$  
+to acquire penalized likelihood estimator of precision matrices $\Theta=(\Theta_1, \cdots, \Theta_n)$
+and hence to infer the snapshots of a time-varying network.
+The method establishes the minimization goal by constructing the loss function consists of a negative log-likelihood with 
+the $l_1$ spatial penalty on $\Theta$ and a convex spatial correlation penalty function on the difference between two adjacent precision matrices $\Theta_i$, $\Theta_{i+1}$. 
+In addition, Hallac et al.\cite{hallac2017networkinferencetimevaryinggraphical} uses Alternating Direction Method of
+Multipliers (ADMM) to derive an efficient algorithm to solve the optimization problem. 
+
+TVGL infers the time-varying network from raw observations, 
+whereas it is possible in real-life cases, for each time stamp, 
+only sample covariance matrices respectively from different subjects are observable and the sample sizes of observations from each subject are unknown.
+In abstract research backgrounds, we may deem a time series of positive definite real matrices as snapshots of a time-varying covariance matrix, 
+with possibly multiple matrices for each time stamp. 
+The typical research questions include inferring time varying cell-cell communication network from cell communication probability matrices, 
+and discovering aging dynamic of brain structure connection. 
+In this way, the observations consist of multiple sample covariance matrices but not single one per time stamp, 
+on which TVGL can't perform directly.
+In order to make TVGL applicable to the aforementioned cases, 
+we adapt TVGL to a multi-subjects version called msTVGL and give the corresponding ADMM solver for $l_1$ and $l_2$ spatial penalty on the basis of the work of Hallac et al.. 
+The adaption is equivalent to using the average of all observed covariance matrices for each time stamp. 
+The msTVGL method is also applicative when in each time stamp the samples are collected from different subjects 
+and can't be mix up directly as a whole considering heterogeneity between subjects. 
+For example, when finding the aging dynamic of gene interaction, 
+if two independent genes happen to express proactively or inactively at the same time in a subject, 
+and cells collected from this subject are much more than the cells from the other subjects, 
+the mixed data will contribute to a false high correlation between the two genes, 
+thereby allowing TVGL to infer the existence of an unnecessary network edge.
+However, the averaged within-subject covariance matrices used by msTVGL will not magnify the heterogeneity between subjects with unequal sample size, 
+and hence reduce the strength of unreal network edges. 
+Furthermore, the prominent difference that msTVGL distinguishes from TVGL is that 
+msTVGL gives the partial correlation matrix at each time stamp to show the connection strength of nodes, 
+and is able to show the change from $t_i$ to $t_{i+1}$
+using the difference between the two partial correlation matrices. 
+
+Below we first introduce the preliminary on the precision matrix and partial correlation, 
+and then derive the updating algorithm of msTVGL with ADMM.
