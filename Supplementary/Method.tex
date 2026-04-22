@@ -1,5 +1,4 @@
 \section{Method}
-
 Suppose we have a time series in $\mathbb{R}^d$ over a period of discrete times $t_1,\cdots,t_T$, 
 where for each time stamp we have $n_i$ observations. 
 We assume the time series is observed from a Gaussian multivariate random vector $X\sim\mathcal{N}(0,\Sigma(t))$. 
@@ -30,8 +29,13 @@ For each $t_i$, the negative log-likelihood function is given by
     -l(\Theta_i) &= -\log\left((2\pi)^{-\frac{n_id}{2}}|\Theta_i|^{\frac{n_i}{2}}\exp\left\{-\frac{1}{2}\sum_{j=1}^{n_i}x_j^T\Theta_ix_j\right\}\right) \notag \\
                &= -\log((2\pi)^{-\frac{n_id}{2}}) - \frac{n_i}{2}\log(|\Theta_i|) +\frac{n_i}{2}\sum_{j=1}^{n_i}\text{Tr}(\frac{1}{n_i}x_j^T\Theta_ix_j) \notag \\
                &= -\log((2\pi)^{-\frac{n_id}{2}}) - \frac{n_i}{2}\log(|\Theta_i|) +\frac{n_i}{2}\text{Tr}(\frac{1}{n_i}\sum_{j=1}^{n_i}x_jx_j^T\Theta_i) \notag \\
-               &= -\log((2\pi)^{-\frac{n_id}{2}}) - \frac{n_i}{2}\log(|\Theta_i|) +\frac{n_i}{2}\text{Tr}(S_i\Theta_i)
+               &= -\log((2\pi)^{-\frac{n_id}{2}}) - \frac{n_i}{2}\log(|\Theta_i|) +\frac{n_i}{2}\text{Tr}(S_i\Theta_i). 
 \end{align}
+Ignoring the constant and a scale, we have the loss used in paper of Hallac et al.\cite{hallac2017networkinferencetimevaryinggraphical}.
+\begin{equation}
+    \label{eq: ch1_loss_paper}
+    -l(\Theta_i) = - n_i\log(|\Theta_i|) +n_i\text{Tr}(S_i\Theta_i). 
+\end{equation}
 Minimizing negative log-likelihood function encourages $\Theta_i=S_i^{-1}$. 
 
 However, if for each time stamp there are multiple subjects contributing total observations, 
@@ -53,15 +57,14 @@ where there are $N_i$ subjects and $\sum_{k=1}^{N_i}n_{ik}=n_i$.
 
 To reduce the influence of imbalanced sample sizes, 
 we further normalize (\ref{eq: ch1_loss_modify1}) by removing the sample sizes $n_{i1},\cdots,n_{iN_i}$. 
-This produces the final log-likelihood loss suitable for the multi-subjects case (up to a constant and scale): 
+This produces the final log-likelihood loss suitable for the multi-subject case (up to a constant and scale): 
 \begin{align}
     \label{eq: ch1_loss_modify1_normalized}
     -l(\Theta_i) &= \sum_{k=1}^{N_i}-\log(|\Theta_i|)+\text{Tr}(S_{ik}\Theta_i) \notag \\
                  &= -N_i\log(|\Theta_i|)+N_i\text{Tr}(\bar{S_i}\Theta_i), 
 \end{align}
 where $\bar{S_i}$ is the mean of sample covariances of all subjects $\frac{1}{N_i}\sum_{k=1}^{N_i}S_{ik}$. 
-Optimizing (\ref{eq: ch1_loss_modify1_normalized}) produces a precision matrix close to $\bar{S_i}^{-1}$, 
-which equally scales the heterogeneity between subjects.
+Optimizing (\ref{eq: ch1_loss_modify1_normalized}) produces a precision matrix close to $\bar{S_i}^{-1}$.
 
 The spatial penalty function is given by the off-diagonal 1-norm of each precision matrix, 
 controlled by a penalty parameter $\lambda$, 
@@ -340,6 +343,7 @@ Recall that $U=\frac{1}{\rho}\tilde{U}$, where $\tilde{U}$ is the dual variable,
 the ADMM penalty parameter $\rho$ is dropped on the both sides of the updating equation. 
 
 \subsection{Hyperparameters}
+\label{subsec: hyperparameters}
 There are two positive hyperparameters controlling penalty strength. 
 For sparsity penalty $\lambda\|\Theta\|_{\text{od}, 1}$, 
 each off-diagonal element $x$ has gradient\footnote{Subgradient at $x=0$ is set to 0 but not $[-\lambda,\lambda]$.}
@@ -357,9 +361,9 @@ When $\lambda$ is small, we expect $\Theta$ better matches the empirical data,
 but will lead to very dense networks, 
 which are less interpretable and often overfit. 
 
-This can be shown by gradient. 
-In fact, when we set temporal penalty to zero. 
-The gradient\footnote{Calculate by Fr\'echet derivative.} of the loss function (\ref{eq: ch1_loss_modify1_normalized}) plus the spatial penalty with respect to $\Theta_i$ is given by 
+This can be displayed using gradient. 
+In fact, when we set temporal penalty to zero, 
+then roughly, the gradient\footnote{Calculate by Fr\'echet derivative.} of the loss function (\ref{eq: ch1_loss_modify1_normalized}) plus the spatial penalty with respect to $\Theta_i$ is given by 
 \begin{align*}
     \nabla_{\Theta_i}(-l(\Theta_i)+\lambda\|\Theta\|_{\text{od,1}}) &= \nabla_{\Theta_i}\left(-N_i\log(|\Theta_i|)+N_i\text{Tr}(\bar{S}_i\Theta_i) + \lambda\|\Theta_i\|_{\text{od}, 1}\right) \\
                                   &= -N_i\Theta_i^{-1} + N_i\bar{S}_i + (\pm\lambda)_{\text{od}},
@@ -373,7 +377,7 @@ a common sparsity penalty will cause over penalized precision matrices at time s
 However, since for a real dataset the subject numbers usually don't vary drastically across all time points, 
 this is not a problem that should be especially emphasized. 
 In fact, the problem of imbalanced observations must be aware of in the original TVGL, 
-because the gradient with respect to $\Theta_i$ of (\ref{eq: ch1_loss}) plus the spatial penalty gives the relationship $\Theta_i^{-1}=S_i+\frac{2}{n_i}(\pm\lambda)_{\text{od}}$. 
+because the gradient with respect to $\Theta_i$ of (\ref{eq: ch1_loss_paper}) plus the spatial penalty gives the relationship $\Theta_i^{-1}=S_i+\frac{1}{n_i}(\pm\lambda)_{\text{od}}$. 
 Unlike subject numbers, the sample numbers tend to be extremely unequal for different time points, 
 whereby over penalized precision matrices are produced. 
 Hence, the loss function of msTVGL (\ref{eq: ch1_lossmsTVGL}) helps to alleviate this phenomena. 
@@ -385,9 +389,15 @@ As $\beta\rightarrow\infty$,
 the problem becomes a static graphical lasso problem since a constant $\Theta$ is the solution.
 
 \subsection{Hyperparameter selection}
-To generate an interpretable and biologically meaningful result, 
-the algorithm must assign the estimated precision matrices a rational sparsity to highlight significant edges and avoid learning too many noises from observations. 
-In addition, the temporal smoothness penalty must be given a proper strength to maintain consecution between adjacent time stamps. 
+
+The hyperparameter selection criterions such as AIC and BIC used by Hallac et al.\cite{hallac2017networkinferencetimevaryinggraphical}
+are suggested based on the assumption of i.i.d. Gaussian observations. 
+Since we extend the method to abstract situations of using symmetric positive definite matrices directly, 
+we suggest an alternative hyperparameter selection method leveraging prior knowledge on the networks 
+that the method learns. 
+% For example, to generate an interpretable and biologically meaningful result, 
+% the algorithm must assign the estimated precision matrices a rational sparsity to highlight significant edges and avoid learning too many noises from observations. 
+% In addition, the temporal smoothness penalty must be given a proper strength to maintain consecution between adjacent time stamps. 
 To achieve this, we introduce the average degree of nodes, Jaccard similarity of adjacent graphs and temporal deviation ratios as standards to restrict the two penalty coefficients. 
 
 The average degree of nodes in a graph is defined by the mean number of edges connected to each node. 

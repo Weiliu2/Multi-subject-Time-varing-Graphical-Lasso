@@ -1,4 +1,4 @@
-\section{Multi-subjects Time-varying graphical Lasso}
+\section{Multi-subject Time-varying graphical Lasso}
 
 A network is composed of a group of nodes connected to each other by edges. 
 Whether two nodes are connected or not depends on their dependence conditional on other nodes.
@@ -18,27 +18,46 @@ Multipliers (ADMM) to derive an efficient algorithm to solve the optimization pr
 TVGL infers the time-varying network from raw observations, 
 whereas it is possible in real-life cases, for each time stamp, 
 only sample covariance matrices respectively from different subjects are observable and the sample sizes of observations from each subject are unknown.
-In abstract research backgrounds, we may deem a time series of positive definite real matrices as snapshots of a time-varying covariance matrix, 
+In abstract research backgrounds, we may deem a time series of symmetric positive definite real matrices as snapshots of a time-varying covariance matrix, 
 with possibly multiple matrices for each time stamp. 
-The typical research questions include inferring time varying cell-cell communication network from cell communication probability matrices, 
+The typical research questions include inferring time varying cell-cell interaction network from cell communication probability matrices, 
 and discovering aging dynamic of brain structure connection. 
 In this way, the observations consist of multiple sample covariance matrices but not single one per time stamp, 
 on which TVGL can't perform directly.
 In order to make TVGL applicable to the aforementioned cases, 
-we adapt TVGL to a multi-subjects version called msTVGL and give the corresponding ADMM solver for $l_1$ and $l_2$ spatial penalty on the basis of the work of Hallac et al.. 
-The adaption is equivalent to using the average of all observed covariance matrices for each time stamp. 
-The msTVGL method is also applicative when in each time stamp the samples are collected from different subjects 
-and can't be mix up directly as a whole considering heterogeneity between subjects. 
-For example, when finding the aging dynamic of gene interaction, 
-if two independent genes happen to express proactively or inactively at the same time in a subject, 
-and cells collected from this subject are much more than the cells from the other subjects, 
-the mixed data will contribute to a false high correlation between the two genes, 
-thereby allowing TVGL to infer the existence of an unnecessary network edge.
-However, the averaged within-subject covariance matrices used by msTVGL will not magnify the heterogeneity between subjects with unequal sample size, 
-and hence reduce the strength of unreal network edges. 
+we adapt TVGL to a multi-subject version called msTVGL and give the corresponding ADMM solver for $l_1$, $l_2$ and Laplacian temporal penalty on the basis of the work of Hallac et al.\cite{hallac2017networkinferencetimevaryinggraphical}. 
+
+The adaption is equivalent to using the average of all observed covariance matrices for each time stamp instead of using an overall sample covariance matrix of all the observations from all subjects.
+This leads to the discussion on the performance of the algorithm when in each time stamp the samples are collected from different subjects 
+and the heterogeneity between them will probably result in precision matrices indicating unnecessary network edges if mixing up all observations as a whole. 
+We find that compared with TVGL, the averaged within-subject covariance matrices used by msTVGL 
+is advantageous in terms of network recovery when subjects with the most observations are more heterogeneous than others at some time points, 
+However, when subjects with the least observations are more heterogeneous than others, 
+TVGL outperforms msTVGL. 
+When the sample sizes of all subjects are nearly equal, 
+msTVGL and TVGL have the same accuracy on the network recovery.
+
+% Therefore, the msTVGL method is also applicative when in each time stamp the samples are collected from different subjects 
+% and can't be mixed up directly as a whole considering heterogeneity between subjects. 
+% For example, when finding the time-varying dynamic of gene interaction, 
+% at each time point, 
+% the gene expression level are noisy due to the RNA sequencing technique and other environmental impacts. 
+% This will potentially makes the covariance matrix of genes deviate from the truth. 
+% Since the noise imposed by uncontrollable confounders are at different levels, 
+% the subjects are heterogeneous. 
+% If now mixing up observations from all subjects directly, 
+% we probably get a precision matrix indicating unnecessary network edges. 
+% However, the averaged within-subject covariance matrices used by msTVGL will relatively increase robustness on network recovery under the heterogeneity between subjects with unequal sample size. 
+
+In addition, TVGL imposes a common sparsity penalty parameter on the precision matrices across all time points, 
+which will cause precision matrices at time points with small total sample sizes over penalized than the others 
+if the sample sizes across all time points are extremely uneven. 
+msTVGL avoids this phenomena
+by dropping the sample size in the negative log-likelihood part of the loss function. 
+
 Furthermore, the prominent difference that msTVGL distinguishes from TVGL is that 
 msTVGL gives the partial correlation matrix at each time stamp to show the connection strength of nodes, 
-and is able to show the change from $t_i$ to $t_{i+1}$
+and is able to show the change from $t_i$ to $t_{i+1}$ in an easily interpretable way,
 using the difference between the two partial correlation matrices. 
 
 Below we first introduce the preliminary on the precision matrix and partial correlation, 
