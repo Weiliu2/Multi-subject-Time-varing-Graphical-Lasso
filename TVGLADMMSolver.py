@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import torch
-import time
 
 class TVGLADMM:
     def __init__(self, lambda_val: float, beta: float, observations: list[np.ndarray] | list[list[np.ndarray]] | None, 
@@ -168,6 +167,7 @@ class TVGLADMM:
         return residuals.item()
     
     def fit(self, verbose: bool = True):
+        self.total_residuals = []; self.primal_residuals = []; self.dual_residuals = []
         for iteration in range(self.epochs):
 
             # Store previous Theta for convergence check
@@ -182,10 +182,12 @@ class TVGLADMM:
             # Check convergence
             primal_residual = self._compute_primal_residual()
             dual_residual = self._compute_dual_residual(Thetas_prev)
-            self.losses = primal_residual + dual_residual
+            self.primal_residuals.append(primal_residual)
+            self.dual_residuals.append(dual_residual)
+            self.total_residuals.append(primal_residual + dual_residual)
             
             if verbose == True and primal_residual < self.tol and dual_residual < self.tol:
-                print(f"Converged at iteration {iteration}")
+                print(f"Converged at iteration {iteration} with primal residual {primal_residual}, dual residual {dual_residual}")
                 break
                 
             if verbose == True and (iteration % 100 == 0 or iteration == self.epochs - 1):
@@ -209,79 +211,76 @@ class TVGLADMM:
         return (intersec.sum(dim=(-2,-1)) / union.sum(dim=(-2,-1))).mean()
 
     """Rough edge construction, edge prediction performance (f1 score), temporal deviation ratio"""
-    def tensor2list(self, tensor_dt: torch.Tensor) -> list[np.ndarray] | np.ndarray:
-        if tensor_dt.dim() == 3:
-            T = tensor_dt.shape[0]
-            # cuda device type tensor can't be converted to numpy because cpu is the host memory -> .cpu()
-            # can't call numpy() on Tensor that requires grad -> .detach()
-            list_dt = tensor_dt.cpu().numpy() 
-            return [list_dt[i].squeeze() for i in range(T)]
-        elif tensor_dt.dim() == 2:
-            return tensor_dt.cpu().numpy()
-        else: raise ValueError("Error detected on the shape of input tensor.")
-
-    def edge_detection(self, thetas_raw: torch.Tensor, link_threshold=0.1) -> list[np.ndarray] | np.ndarray:
-        thetas = self.tensor2list(thetas_raw)
-        if isinstance(thetas, np.ndarray):
-            mask = np.abs(thetas) > link_threshold
-            mask = mask.astype(int)
-            return mask * thetas
-        elif isinstance(thetas, list):
-            As = []
-            for theta in thetas:
+    def edge_detection(self, thetas_raw: torch.Tensor | np.ndarray, link_threshold: float=1e-3) -> np.ndarray:
+        if isinstance(thetas_raw, torch.Tensor):
+            thetas_raw = thetas_raw.cpu().numpy()
+        if thetas_raw.ndim == 3:
+            thetas_shape = thetas_raw.shape
+            As = np.empty((thetas_shape[0], thetas_shape[1], thetas_shape[2]))
+            for i, theta in enumerate(thetas_raw):
                 mask = np.abs(theta) > link_threshold
                 mask = mask.astype(int)
-                As.append(mask * theta)
-            return As
-        else: raise ValueError("Raw thetas should be numpy array or a list of numpy arrays.")
+                As[i] = mask * theta
+            return As # (T,p,p)
+        else: raise ValueError(f"\'thetas_raw\' should has 3 dimensions but the current has only {thetas_raw.ndim} dimensions.")
 
-    def f1_score(self, pred_theta_raw: torch.Tensor, true_theta: list[np.ndarray] | np.ndarray) -> float:
+    def f1_score(self, pred_thetas_raw: torch.Tensor, true_thetas: list[np.ndarray], link_threshold: float=1e-3) -> tuple[list[float], float]:
         """This score is the harmonic mean of the precision and recall."""
-        pred_theta = self.edge_detection(pred_theta_raw)
-        if isinstance(pred_theta, np.ndarray) and isinstance(true_theta, np.ndarray):
-            TP = np.sum((true_theta != 0) & (pred_theta != 0))
-            FP = np.sum((true_theta == 0) & (pred_theta != 0))
-            FN = np.sum((true_theta != 0) & (pred_theta == 0))
-            if TP + FP == 0:
-                precision = 0.0
+        pred_thetas = self.edge_detection(pred_thetas_raw, link_threshold)
+        if isinstance(true_thetas, list):
+            # calculate f1 scores for each prediction
+            TPs = []; FPs = []; FNs = []
+            precisions = []; recalls = []; f1s = []
+            for true, pred in zip(true_thetas, pred_thetas):
+                TP = np.sum((true != 0) & (pred != 0))
+                FP = np.sum((true == 0) & (pred != 0))
+                FN = np.sum((true != 0) & (pred == 0))
+                TPs.append(TP)
+                FPs.append(FP)
+                FNs.append(FN)
+                if TP + FP == 0:
+                    precision = 0.0
+                else:
+                    precision = TP / (TP + FP)
+                precisions.append(precision)
+                if TP + FN == 0:
+                    recall = 0.0
+                else:
+                    recall = TP / (TP + FN)
+                recalls.append(recall)
+                if precision + recall == 0:
+                    f1 = 0.0
+                else:
+                    f1 = 2 * precision * recall / (precision + recall)
+                f1s.append(f1)
+            # calculate a total f1 score for all predictions 
+            TP_all = np.sum(TPs)
+            FP_all = np.sum(FPs)
+            FN_all = np.sum(FNs)
+            if TP_all + FP_all == 0:
+                precision_all = 0.0
             else:
-                precision = TP / (TP + FP)
-            if TP + FN == 0:
-                recall = 0.0
+                precision_all = TP_all / (TP_all + FP_all)
+            if TP_all + FN_all == 0:
+                recall_all = 0.0
             else:
-                recall = TP / (TP + FN)
-            if precision + recall == 0:
-                f1 = 0.0
+                recall_all = TP_all / (TP_all + FN_all)
+            if precision_all + recall_all == 0:
+                f1_all = 0.0
             else:
-                f1 = 2 * precision * recall / (precision + recall)
-            return f1
-        elif isinstance(pred_theta, list) and isinstance(true_theta, list):
-            TP, FP, FN = 0, 0, 0
-            for true, pred in zip(true_theta, pred_theta):
-                TP += np.sum((true != 0) & (pred != 0))
-                FP += np.sum((true == 0) & (pred != 0))
-                FN += np.sum((true != 0) & (pred == 0))
-            if TP + FP == 0:
-                precision = 0.0
-            else:
-                precision = TP / (TP + FP)
-            if TP + FN == 0:
-                recall = 0.0
-            else:
-                recall = TP / (TP + FN)
-            if precision + recall == 0:
-                f1 = 0.0
-            else:
-                f1 = 2 * precision * recall / (precision + recall)
-            return f1
-        else: raise ValueError("Both ground truth Thetas and predictions must be numpy array or a list of numpy arrays.")
+                f1_all = 2 * precision_all * recall_all / (precision_all + recall_all)
+            return f1s, f1_all
+        else: raise ValueError("Require round truth precision matrices to be a list of numpy arrays.")
 
     def temporal_deviation_ratio(self, pred_thetas_raw: torch.Tensor, returnlist: bool=True) -> tuple[list[float] | torch.Tensor, float | torch.Tensor]:
         """This score is the ratio of the temporal deviation at the current time to the average
         temporal deviation value across all time stamps."""
         cur_TD_ratios = torch.norm(pred_thetas_raw[1:] - pred_thetas_raw[:-1], "fro", dim=(-2,-1))
         total_TD_ratio = cur_TD_ratios.sum()
-        TD_ratio = cur_TD_ratios / total_TD_ratio
+        if total_TD_ratio == 0:
+            TD_ratio = cur_TD_ratios * 0
+        else:
+            TD_ratio = cur_TD_ratios / total_TD_ratio
         if returnlist == True:
             return TD_ratio.tolist(), TD_ratio.mean().item()
         else: return TD_ratio, TD_ratio.mean()
@@ -372,7 +371,7 @@ def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]]
         empirical_covs_sum = covariance_sum
         Ns = Ns_reshape
     else:
-        raise ValueError("Either input observations and set covariance_sum and Ns_reshape to None or input covariance_sum and Ns_reshape and set observations to None.") 
+        raise ValueError("Either input \'observations\' and set \'covariance_sum\' and \'Ns_reshape\' to None or input \'covariance_sum\' and \'Ns_reshape\' and set \'observations\' to None.") 
     results = []
     best_lambda = None
     best_beta = None
@@ -389,7 +388,7 @@ def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]]
             for beta_val in lambda_range[:i+1]:
                 model = TVGLADMM(lambda_val=lambda_val, 
                                     beta=beta_val, 
-                                    observations=observations, 
+                                    observations=None, 
                                     penalty_type=penalty_type,
                                     fit_epochs=epoch,
                                     covariance_sum=empirical_covs_sum,
@@ -424,6 +423,7 @@ def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]]
 
 """---------------------------------------Example usage---------------------------------------"""
 if __name__ == "__main__":
+    import time
     
     def create_synthetic_data(T: int, p: int, n_samples: int, change_point: int, multi_samples: bool=True):
         """Generate a series of graphs changing abruptly at an intermediate time stamp."""
@@ -473,7 +473,6 @@ if __name__ == "__main__":
 
     T, change_point = 30, 15
     data_sequence, true_thetas = create_synthetic_data(T=T, p=10, n_samples=250, change_point=change_point)
-    ts = [i**2 for i in range(T)]
 
     # Tuning lambda and beta
     start = time.perf_counter()
@@ -481,7 +480,7 @@ if __name__ == "__main__":
     print("-----------------------------")
     results = hyperparameter_tuner(
         observations = data_sequence,
-        penalty_type='l1',
+        penalty_type='l2',
         verbose=True,
         epoch=50,
     )
@@ -502,7 +501,7 @@ if __name__ == "__main__":
         observations=data_sequence,
         penalty_type='l2',
         rho=1,
-        fit_epochs=500,
+        fit_epochs=250,
         tol=1e-6
     )
     model.fit()
@@ -511,27 +510,42 @@ if __name__ == "__main__":
     print("-------------------------------")
 
     pred_thetas = model.Thetas
-    losses = model.losses
+    total_residuals = model.total_residuals
+    primal_residuals = model.primal_residuals
+    dual_residuals = model.dual_residuals
 
     TD_ratios, TD_ratios_mean = model.temporal_deviation_ratio(pred_thetas)
-    f1 = model.f1_score(pred_thetas, true_thetas)
-    print(f"F_1 score is {f1}.")
+    f1s, f1_all = model.f1_score(pred_thetas, true_thetas, link_threshold=1e-1)
+    Ts = [str(t)+"-"+str(t+1) for t in range(T-1)]
+    print(f"F_1 score for all predictions is {f1_all}.")
 
     # Plot loss, TD ratios and edge evolution
-    plt.figure(figsize=(15, 5))
+    plt.figure(figsize=(15, 10))
 
-    plt.subplot(1, 2, 1)
-    plt.plot(losses)
-    plt.title('Loss')
+    plt.subplot(3, 1, 1)
+    plt.plot(total_residuals, label="total")
+    plt.plot(primal_residuals, label="primal")
+    plt.plot(dual_residuals, label="dual")
+    plt.title('Residuals vs. epoch')
     plt.xlabel('Epoch')
-    plt.ylabel('Loss')
+    plt.ylabel('Residuals')
+    plt.legend()
     
-    plt.subplot(1, 2, 2)
-    plt.plot(TD_ratios)
+    plt.subplot(3, 1, 2)
+    plt.plot(Ts, TD_ratios, label="msTVGL")
     plt.axhline(y=TD_ratios_mean, linestyle='--', linewidth=1, color='red')
     plt.title('Temporal deviation ratios')
-    plt.xlabel('Epoch')
+    plt.xlabel('Time shifts')
     plt.ylabel('TD ratios')
+    plt.legend()
+
+    plt.subplot(3, 1, 3)
+    plt.plot([t+1 for t in range(T)], f1s, label="msTVGL")
+    plt.axhline(y=f1_all, linestyle='--', linewidth=1, color='red')
+    plt.title('F1 scores')
+    plt.xlabel('Time labels')
+    plt.ylabel('F1 scores')
+    plt.legend()
     
     plt.tight_layout()
     plt.show()
@@ -539,7 +553,7 @@ if __name__ == "__main__":
     # plot heat map of all thetas
     plt.figure(figsize=(15, 5))
 
-    pred_thetas = model.edge_detection(pred_thetas)
+    pred_thetas = model.edge_detection(pred_thetas, link_threshold=1e-1)
     for i in range(T):
         plt.subplot(6, 5, i+1)
         plt.imshow(np.abs(pred_thetas[i]) > 0, cmap='Blues')

@@ -3,8 +3,6 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
-import time
-import pandas as pd
 
 """
     TVGL Neural Network solver v2.4
@@ -305,7 +303,10 @@ class TVGLNeural(nn.Module):
         temporal deviation value across all time stamps."""
         cur_TD_ratios = torch.norm(pred_thetas_raw[1:] - pred_thetas_raw[:-1], "fro", dim=(-2,-1))
         total_TD_ratio = cur_TD_ratios.sum()
-        TD_ratio = cur_TD_ratios / total_TD_ratio
+        if total_TD_ratio == 0:
+            TD_ratio = cur_TD_ratios * 0
+        else:
+            TD_ratio = cur_TD_ratios / total_TD_ratio
         if returnlist == True:
             return TD_ratio.tolist(), TD_ratio.mean().item()
         else: return TD_ratio, TD_ratio.mean()
@@ -422,6 +423,8 @@ def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]]
 
 """---------------------------------------Example usage---------------------------------------"""
 if __name__ == "__main__":
+    import time
+    import pandas as pd
     
     def create_synthetic_data(T: int, p: int, n_samples: int, change_point: int, multi_samples: bool=True):
         """Generate a series of graphs changing abruptly at an intermediate time stamp."""
