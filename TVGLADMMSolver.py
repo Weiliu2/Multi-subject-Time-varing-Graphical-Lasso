@@ -117,6 +117,7 @@ class TVGLADMM:
         # Eigen decomposition
         M = eta * self.empirical_covs_sum - A_sym
         eigvals, Q = torch.linalg.eigh(M) # eigvals:(T,p), Q:(T,p,p)
+        eigvals = torch.clamp(eigvals, min=1e-8) # avoid small negative or zero eigenvalues due to low numerical precision or ill-posed sample covariance
         new_eigs = -0.5 * eigvals + torch.sqrt(0.25*eigvals**2+(self.Ns*eta).squeeze(-1))
         Thetas_new = Q @ torch.diag_embed(new_eigs) @ Q.transpose(-1, -2)
         return (Thetas_new + Thetas_new.transpose(-2,-1)) / 2
@@ -193,41 +194,55 @@ class TVGLADMM:
             if verbose == True and (iteration % 100 == 0 or iteration == self.epochs - 1):
                 print(f"Iteration {iteration}, Primal: {primal_residual:.6f}, Dual: {dual_residual:.6f}")
 
-    """Score computation for hyperparameter selection"""     
-    def calculate_average_degree(self, thr: float=1e-6):
+    """Score computation for hyperparameter selection"""
+    def calculate_information_criterion(self, pred_thetas_raw: torch.Tensor, criterion: str="eBIC", link_threshold: float=1e-3, gamma: float=0.1):
+        neg_log = - self.Ns.squeeze((-2,-1)) @ torch.linalg.slogdet(pred_thetas_raw)[-1] + torch.diagonal(self.empirical_covs_sum @ pred_thetas_raw, dim1=-2, dim2=-1).sum()
+        if criterion == "AIC":
+            score_param = torch.tensor(self.T*(self.p-1)*self.p, dtype=self.dtype, device=self.device)
+            score_overall = 2*neg_log + score_param
+        elif criterion == "BIC":
+            mask = torch.abs(pred_thetas_raw) > link_threshold
+            score_param = mask.sum(dim=(-2,-1)).double() @ torch.log(self.Ns.squeeze((-2,-1)))
+            score_overall = 2*neg_log + score_param
+        elif criterion == "eBIC":
+            mask = torch.abs(pred_thetas_raw) > link_threshold
+            score_param = mask.sum(dim=(-2,-1)).double() @ torch.log(self.Ns.squeeze((-2,-1))) + 4 * gamma * mask.sum().double() * np.log(self.p)
+            score_overall = 2*neg_log + score_param
+        return neg_log.item(), score_param.item(), score_overall.item()
+
+    def calculate_average_degree(self, pred_thetas_raw: torch.Tensor, link_threshold: float=1e-3):
         """Calculate average interacting node number of each node"""
-        final_thetas = self.Thetas
-        nzeros_mask = final_thetas.abs() >= thr
-        return nzeros_mask.sum() / self.T / self.p 
+        final_thetas = self.edge_detection(pred_thetas_raw, link_threshold)
+        nzeros_mask = final_thetas != 0
+        return nzeros_mask.sum() / self.T / self.p
     
-    def Jaccard_similarity(self, thr: float=1e-6):
+    def Jaccard_similarity(self, pred_thetas_raw: torch.Tensor, link_threshold: float=1e-3):
         """Calculate Jaccard similarity between adjacent graphs"""
-        final_thetas= self.Thetas
-        nzeros_mask = final_thetas.abs() >= thr
+        final_thetas= self.edge_detection(pred_thetas_raw, link_threshold)
+        nzeros_mask = final_thetas != 0
         graph_last = nzeros_mask[:-1]
         graph_curr = nzeros_mask[1:]
         intersec = graph_last * graph_curr
         union = (graph_last + graph_curr) > 0
-        return (intersec.sum(dim=(-2,-1)) / union.sum(dim=(-2,-1))).mean()
+        return (np.sum(intersec, axis=(-2,-1)) / np.sum(union, axis=(-2,-1))).mean()
 
     """Rough edge construction, edge prediction performance (f1 score), temporal deviation ratio"""
-    def edge_detection(self, thetas_raw: torch.Tensor | np.ndarray, link_threshold: float=1e-3) -> np.ndarray:
-        if isinstance(thetas_raw, torch.Tensor):
-            thetas_raw = thetas_raw.cpu().numpy()
+    def edge_detection(self, thetas_raw: torch.Tensor, link_threshold: float=1e-3, to_numpy: bool=True) -> torch.Tensor | np.ndarray:
+        """This function returns the precision matrix after removing all the matrix elements that do not meet the threshold."""
         if thetas_raw.ndim == 3:
             thetas_shape = thetas_raw.shape
-            As = np.empty((thetas_shape[0], thetas_shape[1], thetas_shape[2]))
-            for i, theta in enumerate(thetas_raw):
-                mask = np.abs(theta) > link_threshold
-                mask = mask.astype(int)
-                As[i] = mask * theta
+            As = torch.empty((thetas_shape[0], thetas_shape[1], thetas_shape[2]))
+            mask = torch.abs(thetas_raw) > link_threshold
+            As = mask * thetas_raw
+            if to_numpy == True:
+                As = As.cpu().numpy()
             return As # (T,p,p)
         else: raise ValueError(f"\'thetas_raw\' should has 3 dimensions but the current has only {thetas_raw.ndim} dimensions.")
 
-    def f1_score(self, pred_thetas_raw: torch.Tensor, true_thetas: list[np.ndarray], link_threshold: float=1e-3) -> tuple[list[float], float]:
+    def f1_score(self, pred_thetas_raw: torch.Tensor, true_thetas: list[np.ndarray] | np.ndarray, link_threshold: float=1e-3) -> tuple[list[float], float]:
         """This score is the harmonic mean of the precision and recall."""
         pred_thetas = self.edge_detection(pred_thetas_raw, link_threshold)
-        if isinstance(true_thetas, list):
+        if isinstance(true_thetas, list) or isinstance(true_thetas, np.ndarray):
             # calculate f1 scores for each prediction
             TPs = []; FPs = []; FNs = []
             precisions = []; recalls = []; f1s = []
@@ -270,7 +285,7 @@ class TVGLADMM:
             else:
                 f1_all = 2 * precision_all * recall_all / (precision_all + recall_all)
             return f1s, f1_all
-        else: raise ValueError("Require round truth precision matrices to be a list of numpy arrays.")
+        else: raise ValueError("Require round truth precision matrices to be a list of numpy arrays or a numpy arrays with 3 dimensions.")
 
     def temporal_deviation_ratio(self, pred_thetas_raw: torch.Tensor, returnlist: bool=True) -> tuple[list[float] | torch.Tensor, float | torch.Tensor]:
         """This score is the ratio of the temporal deviation at the current time to the average
@@ -287,7 +302,7 @@ class TVGLADMM:
     
 
 def covariance_stacker(covariance_matrices: list[np.ndarray], Ns: list[int]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute the sum of all sample covariance matrices and reshape the list of subject numbers per time stamp.
+    """Compute the sum of all sample covariance matrices and reshape the list of subject number per time stamp.
     
     Parameters
     ----------
@@ -314,19 +329,24 @@ def covariance_stacker(covariance_matrices: list[np.ndarray], Ns: list[int]) -> 
         cov_sum_temp = np.sum(covs, axis=0)
         cov_sums.append(cov_sum_temp)
         loc += N
-    return torch.tensor(cov_sums), torch.tensor(Ns).view(len(Ns),1,1)
+    return torch.tensor(np.array(cov_sums)), torch.tensor(np.array(Ns)).view(len(Ns),1,1)
 
 def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]] | None,
                          covariance_sum: torch.Tensor | None=None,
                          Ns_reshape: torch.Tensor | None=None,
                          lambda_range: list[float] | np.ndarray = np.logspace(-4, 0, 10),
+                         beta_range: list[float] | np.ndarray = np.logspace(-4, 0, 10),
+                         warm_start: bool = True,
                          penalty_type: str = 'l1',
-                         ad_min_rate : float = 0.05,
-                         ad_max_rate : float = 0.15,
-                         thr : float = 1e-3,
+                         ad_min_rate: float = 0.05,
+                         ad_max_rate: float = 0.15,
+                         js_min: float = 0.5,
+                         js_max: float = 0.9,
+                         criterion: str = "BIC",
+                         thr: float = 1e-3,
                          epoch: int = 100,
-                         verbose: bool = True) -> dict | list[dict]:
-    """Hyperparameter selection with warm start.
+                         verbose: bool = True) -> dict | None:
+    """Hyperparameter selection.
     
     Parameters
     ----------
@@ -337,29 +357,35 @@ def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]]
     Ns_reshaped : torch.Tensor | None
         The stacked subject numbers of all the time stamps, with shape (1,p,p), defaulted to None
     lambda_range : list[float] | np.ndarray
-        The range of sparsity penalty, defaulted to np.logspace(-4, 0, 10).
+        The range of sparsity penalty parameter, defaulted to np.logspace(-4, 0, 10).
+    beta_range : list[float] | np.ndarray
+        The range of temporal smoothness penalty parameter, defaulted to np.logspace(-4, 0, 10).
+    warm_start : bool
+        Whether to use warm start when testing beta.
     penalty_type : str
         The type of sparsity penalty, chosen between 'l1' and 'l2', defaulted to 'l1'
     ad_min_rate : float
         The minimal percentage of average degree accounting for the total number of nodes, defaulted to 0.05
     ad_max_rate : float
         The maximal percentage of average degree accounting for the total number of nodes, defaulted to 0.15
+    js_min : float
+        The minimal acceptable Jaccard similarity index, defaulted to 0.5
+    js_max : float
+        The maximal acceptable Jaccard similarity index, defaulted to 0.9
     thr : float
         The minimal value of a precision matrix entry that can be seen as none zero, defaulted to 1e-3
     epoch : int
         The total iterations for each parameter combination test, defaulted to 100
     verbose : bool
-        Whether to display the tunning process or not, defaulted to True
+        Whether to display the tunning process, defaulted to True
     
     Return
     ------
     A dictionary
 
     "best lambda" : all sparsity penalties that meet the requirement
-    "average degree" " the average degrees for all best parameter combinations
     "best beta" : all temporal penalties that meet the requirement
-    "sharp transitions" : the sharp transitions for all best parameter combinations
-        We say a transition is sharp if its TD ratio is larger than 1.25 times of the average.
+    "average degree" " the average degrees for all best parameter combinations
     "Jaccard similarity" : the Jaccard similarity index for all best parameter combinations
     """
     # precompute covariance matrices, ns and mask
@@ -372,53 +398,53 @@ def hyperparameter_tuner(observations: list[np.ndarray] | list[list[np.ndarray]]
         Ns = Ns_reshape
     else:
         raise ValueError("Either input \'observations\' and set \'covariance_sum\' and \'Ns_reshape\' to None or input \'covariance_sum\' and \'Ns_reshape\' and set \'observations\' to None.") 
-    results = []
-    best_lambda = None
-    best_beta = None
     ad_min = ad_min_rate * empirical_covs_sum.shape[-1] 
     ad_max = ad_max_rate * empirical_covs_sum.shape[-1]
+    lambda_record = []
+    beta_record = []
+    js_record = []
+    ad_record = []
     for i, lambda_val in enumerate(lambda_range):
         if verbose == True:
             print("-"*20)
             print(f"Testing lambda={lambda_val:.4f}")
-            score = torch.inf
-            best_ad = torch.tensor(0)
-            best_js = torch.tensor(0)
-            # warm start
-            for beta_val in lambda_range[:i+1]:
-                model = TVGLADMM(lambda_val=lambda_val, 
-                                    beta=beta_val, 
-                                    observations=None, 
-                                    penalty_type=penalty_type,
-                                    fit_epochs=epoch,
-                                    covariance_sum=empirical_covs_sum,
-                                    Ns=Ns,)
-                model.fit(verbose=False)
-                # compute number of sharp transitions
-                final_thetas = model.Thetas
-                TD_ratios, TD_ratios_mean = model.temporal_deviation_ratio(final_thetas, returnlist=False)
-                sharp_trans = TD_ratios > TD_ratios_mean*1.25
-                count = sharp_trans.sum()
-                # compute average degree and Jaccard similarity
-                ad = model.calculate_average_degree(thr)
-                js = model.Jaccard_similarity(thr)
-                if verbose == True:
-                    print(f"Sharp transitions for beta={beta_val:.4f} is {count}, average degree is {ad} and Jaccard similarity is {js}")
-                # check requirements
-                if 0 < count < score and ad_min <= ad <= ad_max and 0.35 <= js <= 0.8:
-                    best_lambda = lambda_val
-                    best_beta = beta_val
-                    score = count
-                    best_ad = ad
-                    best_js = js
-                    results.append({
-                    "best lambda": best_lambda,
-                    "average degree": best_ad.item(),
-                    "best beta": best_beta,
-                    "sharp transitions": score.item() if type(score)!=float else score,
-                    "Jaccard similarity": best_js.item()
-                    })
-    return results
+        # warm start
+        if warm_start == True:
+            current_beta_space = lambda_range[:i+1]
+        else:
+            current_beta_space = beta_range
+        for beta_val in current_beta_space:
+            model = TVGLADMM(lambda_val=lambda_val, 
+                                beta=beta_val, 
+                                observations=None, 
+                                penalty_type=penalty_type,
+                                fit_epochs=epoch,
+                                covariance_sum=empirical_covs_sum,
+                                Ns=Ns)
+            model.fit(verbose=False)
+            final_thetas = model.Thetas
+            # compute average degree and Jaccard similarity
+            ad = model.calculate_average_degree(final_thetas, thr)
+            js = model.Jaccard_similarity(final_thetas, thr)
+            if verbose == True:
+                neg_log, score_param, score = model.calculate_information_criterion(final_thetas, criterion, thr)
+                print(f"For beta={beta_val:.3f}, score is {score:.3f}={neg_log:.3f}+{score_param:.3f}, average degree is {ad:.3f} and Jaccard similarity is {js:.3f}")
+            # check requirements
+            if ad_min <= ad <= ad_max and js_min <= js <= js_max:
+                lambda_record.append(lambda_val)
+                beta_record.append(beta_val)
+                ad_record.append(ad.item())
+                js_record.append(js.item())
+    if len(lambda_record) == 0:
+        print("No satisfactory parameters.")
+        return None
+    else: 
+        results = {
+        "best lambda": lambda_record,
+        "best beta": beta_record,
+        "average degree": ad_record,
+        "Jaccard similarity": js_record}
+        return results
 
 
 """---------------------------------------Example usage---------------------------------------"""
@@ -481,6 +507,7 @@ if __name__ == "__main__":
     results = hyperparameter_tuner(
         observations = data_sequence,
         penalty_type='l2',
+        criterion="AIC",
         verbose=True,
         epoch=50,
     )

@@ -5,6 +5,16 @@ import matplotlib.colors as mcolors
 import seaborn as sns
 
 class Visualizer():
+    """
+    The visualizer for msTVGL
+
+    Parameters
+    ----------
+    precision_matrices : np.ndarray
+        Estimated precision matrices acquired from msTVGL, with shape (T,p,p)
+    gname : list[str]
+        The list of the names of the interacting elements in the network
+    """
     def __init__(self, precision_matrices: np.ndarray, gname: list[str]):
         self.gname = gname
         self.precision_matrices = precision_matrices
@@ -13,7 +23,7 @@ class Visualizer():
         elif precision_matrices.ndim == 3:
             self.pcorrs = self.precision_to_partial_corr(precision_matrices)
         else:
-            raise ValueError("Precision_matrices must be a NdArray with shape (T,p,p) or (p,p).")
+            raise ValueError("Precision_matrices must be an array with shape (T,p,p) or (p,p).")
 
     def precision_to_partial_corr(self, thetas: list[np.ndarray] | np.ndarray) -> list[np.ndarray]:
         """
@@ -21,7 +31,8 @@ class Visualizer():
 
         Parameters
         ----------
-        thetas : list[np.ndarray] with shape (p,p) and length T or np.ndarray with shape (T,p,p)."""
+        thetas : list[np.ndarray] 
+            with shape (p,p) and length T or np.ndarray with shape (T,p,p)."""
         pcorrs = []
         for theta in thetas:
             d = np.sqrt(np.diag(theta))
@@ -57,7 +68,7 @@ class Visualizer():
         thr : float
             Correction factor to magnify or reduce elements of x, defaulted to 0.01
         """
-        sign = np.sign(x)
+        sign = np.sign(x) # returns -1 if x<0, 0 if x==0, 1 otherwise
         return sign * np.log10(1 + np.abs(x)/thr)
 
     def subject_by_module(self):
@@ -70,10 +81,10 @@ class Visualizer():
             subject_by_module_list.append(gname[mask].tolist())
         return subject_by_module_list
 
-    def top_k_pcorrs(self, pcorr: np.ndarray, k: int, t: int | str, sign: str="positive") -> pd.DataFrame:
+    def top_k_pcorrs(self, pcorr: np.ndarray, k: int, t: float | str, sign: str="positive", verbose: bool=True) -> pd.DataFrame:
         """
         Give the top-k largest partial correlations of negative or positive values
-        in the strictly lower triangular part of a precision matrix.
+        in the strictly lower triangular part of a partial correlation matrix.
 
         Parameters
         ----------
@@ -84,7 +95,9 @@ class Visualizer():
         t : int | str
             Current time label
         sign : str
-            Take value between "positive" and "negative"
+            To choose top k positive or negative ones. Take value between "positive" and "negative"
+        verbose : bool
+            Whether to print the warning that partial correlations with required sign is smaller than the rank size, defaulted to True
 
         Return
         -------
@@ -102,11 +115,23 @@ class Visualizer():
         # sort by descending value: np.argsort sorts ascendingly and returns indices.
         if sign == "positive":
             order = np.argsort(vals)[::-1] # [::-1]: take the entire sequence and reverse it. General slice form sequence[start : stop : step].
+            positive_num = len(np.where(order > 0)[0])
+            if positive_num >= k: m = k
+            else: 
+                m = positive_num
+                if verbose == True:
+                    print(f"There are only {m} positive partial correlations at time label {t}")
         elif sign == "negative":
             order = np.argsort(vals)
-        rows_sorted = rows[order][:k]
-        cols_sorted = cols[order][:k]
-        vals_sorted = vals[order][:k]
+            negative_num = len(np.where(order < 0)[0])
+            if negative_num >= k: m = k
+            else: 
+                m = negative_num
+                if verbose == True:
+                    print(f"There are only {m} negative partial correlations at time label {t}")
+        rows_sorted = rows[order][:m]
+        cols_sorted = cols[order][:m]
+        vals_sorted = vals[order][:m]
 
         gname = np.array(self.gname)
         pairs = np.char.add(np.char.add(gname[rows_sorted], "-"), gname[cols_sorted])
@@ -119,145 +144,164 @@ class Visualizer():
                            "time": ts})
         return df
     
-    # def top_k_precs(self, theta: np.ndarray, k: int, t: int) -> pd.DataFrame:
-    #     """
-    #     Returns (rows, cols, values) of the top-k largest absolute precision matrix entries 
-    #     in the strictly lower triangular part of precision matrix.
-    #     """
-    #     # row column indices of strict triangular part: rows, cols: ndarray, dim=1
-    #     rows, cols = np.tril_indices(theta.shape[0], k=-1)
-    #     # values of strict triangular part: vals: ndarray, dim=1
-    #     vals = theta[rows, cols]
-    #     # sort by descending absolute value: np.argsort sorts ascendingly and returns indices.
-    #     order = np.argsort(np.abs(vals))[::-1] # [::-1]: take the entire sequence and reverse it. General slice form sequence[start : stop : step].
-    #     rows_sorted = rows[order][:k]
-    #     cols_sorted = cols[order][:k]
-    #     vals_sorted = vals[order][:k]
-
-    #     gname = np.array(self.gname)
-    #     pairs = np.char.add(np.char.add(gname[rows_sorted], "-"), gname[cols_sorted])
-    #     ranks = np.array([i for i in range(1, k+1)])
-    #     ts = t * np.ones(k)
-
-    #     df = pd.DataFrame({"pair": pairs,
-    #                        "pcorr": vals_sorted,
-    #                        "rank": ranks,
-    #                        "time": ts})
-    #     return df
-    
-    def riverplot(self, k: int, ts: list, min_times: int=5, source: str='line'): 
+    def show_network(self, precs: np.ndarray,
+                     multiplot_layout: tuple[int, int],
+                     main_title: str,
+                     subtitles: list[str]=[],
+                     threshold: float=1e-3,
+                     figsize: tuple[float, float]=(12,12),
+                     save_to_file: str="svg"):
+        """Plot the networks using precision matrices or matrices that represent network structures.
+        
+            Parameters
+            ----------
+            precs: np.ndarray
+                Precision matrices or matrices that represent network structures
+            multiplot_layout: tuple[int, int]
+                Only works when multiple networks are put in. 
+                The layout of the subplots which is the tuple of input of matplotlib.pyplot.subplots() "nrows" and "ncols"
+            main_title: str
+                The main title of the output figure
+            subtitles: list[str]
+                Only works when multiple networks are put in.
+                The titles of the subplots, defaulted to an empty list[].
+            threshold: float
+                The minimum matrix entry that is recognized as an edge, defaulted to 1e-3
+            figsize: tuple[float, float]
+                The size of the output figure, defaulted to (12,12)
+            save_to_file: str
+                The format that the figure is saved as, defaulted to ""svg
         """
-        Use subject pairs that partial correlations get into the top-k rank at least min_times across all time stamps.
-           Plot the river plot of the rank changes of those gene pairs.
+        if precs.ndim == 2:
+            fig, ax = plt.subplots(figsize=figsize)
+            ax.imshow(np.abs(precs)>threshold, cmap='Blues')
+            ax.set_xticks([i for i in range(precs.shape[0])])
+            ax.set_xticklabels(self.gname, rotation=90, fontsize=6)
+            ax.set_yticks([i for i in range(precs.shape[0])])
+            ax.set_yticklabels(self.gname, fontsize=6)
+            ax.set_title(main_title)
+            plt.savefig(f"{main_title}.{save_to_file}")
+            plt.show()
+        elif precs.ndim == 3:
+            fig, ax = plt.subplots(multiplot_layout[0], multiplot_layout[1], squeeze=False, figsize=figsize)
+            for i in range(multiplot_layout[0]):
+                for j in range(multiplot_layout[1]):
+                    ax[i, j].imshow(np.abs(precs[j])>threshold, cmap='Blues')
+                    ax[i, j].set_xticks([i for i in range(precs[j].shape[0])])
+                    ax[i, j].set_xticklabels(self.gname, rotation=90, fontsize=6)
+                    ax[i, j].set_yticks([i for i in range(precs[j].shape[0])])
+                    ax[i, j].set_yticklabels(self.gname, fontsize=6)
+                    ax[i, j].set_title(subtitles[j])
+            fig.suptitle(main_title, fontsize=10)
+            plt.savefig(f"{main_title}.{save_to_file}")
+            plt.show()
+
+    def lineplot(self, ts: list, 
+                 certain_pairs: tuple[str, str] | list[tuple[str, str]], 
+                 title: str, 
+                 figsize: tuple[float, float]=(12,6),
+                 ylim_bottom: float=-1,
+                 ylim_top: float=1,
+                 save_to_file: str="svg"):
+        """
+        Plot the partial correlations of certain interacting pairs across all time points.
+
+        Parameters
+        ----------
+        ts : list
+            Label of time points
+        certain_pairs : tuple[str, str] | list[tuple[str, str]]
+            Interacting pairs that are included in the plot
+        title : str
+            Main title of the plot
+        figsize : tuple[float, float]
+            Size of the plot, defaulted to (12,6)
+        save_to_file : str
+            The format of the plot to be saved as, defaulted to "svg"
+        """
+        label_dict = {label: idx for idx, label in enumerate(self.gname)}
+        if isinstance(certain_pairs, tuple):
+            certain_pairs = [certain_pairs]
+        pos = []
+        for pair in certain_pairs:
+            pos1 = label_dict[pair[0]]
+            pos2 = label_dict[pair[1]]
+            pos.append((pos1, pos2))
+        fig, ax = plt.subplots(figsize=figsize)
+        for i, p in enumerate(pos):
+            pcorr_values = [pcorr[p[0], p[1]] for pcorr in self.pcorrs]
+            ax.plot(ts, pcorr_values, label=f"{certain_pairs[i][0]}-{certain_pairs[i][1]}")
+        ax.set_ylim(ylim_bottom, ylim_top)
+        ax.set_xlabel("Time points")
+        ax.set_ylabel("Partial correlations")
+        ax.legend()
+        ax.set_title(title)
+        plt.savefig(f"{title}.{save_to_file}")
+        plt.tight_layout()
+        plt.show()
+    
+    def sankeyplot(self, k: int, ts: list, sign: str="positive"): 
+        """
+        Choose interacting pairs whose partial correlations get into the top "k" ranks of positive or negative values.
+        Those pairs appear in at least one consecutive time transition across all time stamps.
+        Plot the Sankey plot of the rank changes of those interacting pairs relying on plotly package.
         
         Parameters
         ----------
         k : int
             Rank size
         ts : list
-            The list of time labels
-        min_time : int 
-            The least total count of a pair appears in the top-k rank of partial correlations, defaulted to 5.
-        source : str
-            The style of the riverplot, which is chosen among "line"(line graph), "pa"(Alluvial diagram) and "sankey"(Sankey graph), defaulted to "line".
+            The list of time labels like "Age1, Age2, ...". Must not be vocabulary like "Young", "Adult".
+        sign : str
+            The sign of partial correlations chosen between "positive" and "negative", defaulted to "positive"
         """
-        if source == 'line':
-            raw_rank_dfs = pd.concat([self.top_k_pcorrs(pcorr, k, t) for pcorr, t in zip(self.pcorrs, ts)])
-            # Filter to pairs that persist across time
-            valid_pairs = (raw_rank_dfs.groupby("pair")["time"].nunique().loc[lambda x: x >= min_times].index)
-            rank_dfs = raw_rank_dfs[raw_rank_dfs["pair"].isin(valid_pairs)]
-            # Convert ranks into vertical positions: Lower rank = higher on plot, so invert
-            rank_dfs["y"] = k - rank_dfs["rank"]
+        import plotly.graph_objects as go
+        raw_rank_dfs = pd.concat([self.top_k_pcorrs(pcorr, k, t, sign, verbose=False) for pcorr, t in zip(self.pcorrs, ts)])
+        times = sorted(raw_rank_dfs["time"].unique())
+        pairs_in_consecutive = set() # Initialize an empty set to store persistent gene pairs
+        # collect all pairs that appear in at least one consecutive time transition
+        for t0, t1 in zip(times[:-1], times[1:]):
+            p0 = set(raw_rank_dfs[raw_rank_dfs["time"] == t0]["pair"]) # set of gene pair names belonging to t0
+            p1 = set(raw_rank_dfs[raw_rank_dfs["time"] == t1]["pair"])
+            pairs_in_consecutive |= (p0 & p1) # |= union accumulate, & intersection
+        df = raw_rank_dfs[raw_rank_dfs["pair"].isin(pairs_in_consecutive)] 
+        # Create Sankey nodes: Nodes = unique (time, rank) combinations
+        node_df = (
+            df[["time", "rank"]] # Only time and rank matter for Sankey nodes
+            .drop_duplicates() # in case there are same (time, rank) combinations but actually no
+            .sort_values(["time", "rank"])
+            .reset_index(drop=True)
+        )
+        node_df["node_id"] = range(len(node_df))
+        # Create a dictionary with mapping (time, rank) -> node_id
+        node_lookup = {
+            (row.time, row.rank): row.node_id
+            for row in node_df.itertuples() # .itertuples() iterates over DataFrame rows as namedtuples
+        }
+        # Initialize link containers
+        sources = []
+        targets = []
+        values = []
+        labels = []
+        # Build links
+        for pair, g in df.groupby("pair"): # pair is the gene pair name and g is the grouped dataframe of this pair
+            g = g.sort_values("time")
 
-            fig, ax = plt.subplots(figsize=(12, 6))
+            for (_, r0), (_, r1) in zip(g.iloc[:-1].iterrows(), g.iloc[1:].iterrows()): # .iterrows() returns the row as a Series which is r0 or r1
+                src = node_lookup[(r0.time, r0["rank"])] # node_id of start point of the link
+                tgt = node_lookup[(r1.time, r1["rank"])] # node_id of end point of the link
 
-            time_to_x = {t: i for i, t in enumerate(ts)}
-            pairs = []
-            for pair, g in rank_dfs.groupby("pair"):
-                g = g.sort_values("time")
-                x = g["time"].map(time_to_x)
-                y = g["y"]
-                pairs.append(pair)
-                ax.plot(
-                    x,
-                    y,
-                    alpha=0.3,
-                    linewidth=1
-                )
-            ax.legend(labels=pairs)
-            ax.set_xticks(range(len(ts)))
-            ax.set_xticklabels(ts)
-            ax.set_ylabel("Rank (higher = stronger partial correlation)")
-            ax.set_title("Partial Correlation Rank Dynamics")
+                sources.append(src)
+                targets.append(tgt)
 
-            ax.invert_yaxis()
-            plt.tight_layout()
-            plt.show()
-        elif source == 'pa':
-            import pylluvial as pa
-            raw_rank_dfs = pd.concat([self.top_k_pcorrs(pcorr, k, t) for pcorr, t in zip(self.pcorrs, ts)])
-            # Filter to pairs that persist across time
-            valid_pairs = (raw_rank_dfs.groupby("pair")["time"].nunique().loc[lambda x: x >= min_times].index)
-            rank_dfs = raw_rank_dfs[raw_rank_dfs["pair"].isin(valid_pairs)]
-            flows = rank_dfs[["time", "pair", "rank"]]
-            fig, ax = plt.subplots(figsize=(10, 5))
-            pa.alluvial(
-                x="time",
-                stratum="rank",
-                alluvium="pair",
-                data=flows,
-                ax=ax,
-                show_labels=True
-            )
-            plt.show()
-        elif source == 'sankey':
-            import plotly.graph_objects as go
-            raw_rank_dfs = pd.concat([self.top_k_pcorrs(pcorr, k, t) for pcorr, t in zip(self.pcorrs, ts)])
-            times = sorted(raw_rank_dfs["time"].unique())
-            pairs_in_consecutive = set() # Initialize an empty set to store persistent gene pairs
-            # collect all pairs that appear in at least one consecutive time transition
-            for t0, t1 in zip(times[:-1], times[1:]):
-                p0 = set(raw_rank_dfs[raw_rank_dfs["time"] == t0]["pair"]) # set of gene pair names belonging to t0
-                p1 = set(raw_rank_dfs[raw_rank_dfs["time"] == t1]["pair"])
-                pairs_in_consecutive |= (p0 & p1) # |= union accumulate, & intersection
-            df = raw_rank_dfs[raw_rank_dfs["pair"].isin(pairs_in_consecutive)] 
-            # Create Sankey nodes: Nodes = unique (time, rank) combinations
-            node_df = (
-                df[["time", "rank"]] # Only time and rank matter for Sankey nodes
-                .drop_duplicates() # in case there are same (time, rank) combinations but actually no
-                .sort_values(["time", "rank"])
-                .reset_index(drop=True)
-            )
-            node_df["node_id"] = range(len(node_df))
-            # Create a dictionary with mapping (time, rank) → node_id
-            node_lookup = {
-                (row.time, row.rank): row.node_id
-                for row in node_df.itertuples() # .itertuples() iterates over DataFrame rows as namedtuples
-            }
-            # Initialize link containers
-            sources = []
-            targets = []
-            values = []
-            labels = []
-            # Build links
-            for pair, g in df.groupby("pair"): # pair is the gene pair name and g is the grouped dataframe of this pair
-                g = g.sort_values("time")
+                # thickness: use absolute partial correlation
+                values.append(abs(r1["pcorr"]))
 
-                for (_, r0), (_, r1) in zip(g.iloc[:-1].iterrows(), g.iloc[1:].iterrows()): # .iterrows() returns the row as a Series which is r0 or r1
-                    src = node_lookup[(r0.time, r0["rank"])] # node_id of start point of the link
-                    tgt = node_lookup[(r1.time, r1["rank"])] # node_id of end point of the link
+                labels.append(pair)
+        values = np.array(values)
+        # values = 1 + 9 * (values - values.min()) / (values.max() - values.min()) # normalize thickness to avoid extremely small or large numbers
 
-                    sources.append(src)
-                    targets.append(tgt)
-
-                    # thickness: use absolute partial correlation
-                    values.append(abs(r1["pcorr"]))
-
-                    labels.append(pair)
-            values = np.array(values)
-            # values = 1 + 9 * (values - values.min()) / (values.max() - values.min()) # normalize thickness to avoid extremely small or large numbers
-
-            fig = go.Figure(
+        fig = go.Figure(
                 data=[
                     go.Sankey(
                         arrangement="fixed",
@@ -280,17 +324,23 @@ class Visualizer():
                     )
                 ]
             )
-            fig.update_layout(
+        fig.update_layout(
                 title="Partial Correlation Rank Dynamics",
                 font_size=10,
                 height=600,
             )
-            fig.show()
+        fig.show()
 
-    def heatmap(self, pcorr: np.ndarray, title: str='Heatmap', style: str='difference', figsize=(12,12), show_boundary: bool=True, show_clusters: bool=True):
+    def heatmap(self, pcorr: np.ndarray, title: str='Heatmap', title_fontsize: float=16,
+                log_transform: bool=True,
+                style: str='difference', 
+                figsize: tuple[float, float]=(12,12), 
+                show_boundary: bool=True, 
+                show_clusters: bool=True, 
+                save_to_file: str="svg"):
         """
         Perform hierarchical clustering of subjects based on a distance matrix calculated from a partial correlation matrix. 
-        Plot heatmap of the network based on the clustering result. 
+        Plot heatmap of the partial correlation network based on the clustering result. 
 
         Parameters
         ---------
@@ -300,16 +350,22 @@ class Visualizer():
             Name of all subjects
         title : str
             Title of the heatmap
+        title_fontsize : float
+            The font size of title, defaulted to 16
+        log_transform : bool
+            Whether to transform adjacent matrix computed from partial correlation matrix with log10 to increase contrast between heatmap block, defaulted to True
         style : str
             The method of calculating distance from partial correlation, which is chosen between "difference" and "original", defaulted to ""difference. 
-            "difference" uses the difference between two partial correlation matrix and "original" use a partial correlation matrix directly. 
-        figsize : Tuple[int, int]
-            The size of the heatmap
+            "difference" uses the difference between two partial correlation matrix and "original" uses a partial correlation matrix directly. 
+        figsize : Tuple[float, float]
+            The size of the heatmap, defaulted to (12, 12)
         show_boundary : bool
             Whether to show the boundaries between clusters on the heatmap. 
             Only works when show_clusters is True.
         show_clusters : bool
             Whether to show dendrogram on the heatmap. 
+        save_to_file : str
+            The file type of the saved image, defaulted to "svg".
         """
         from scipy.cluster.hierarchy import linkage, fcluster
         from scipy.spatial.distance import squareform
@@ -317,23 +373,23 @@ class Visualizer():
         from matplotlib.colors import TwoSlopeNorm
 
         if style == 'original':
-            adjacency = pcorr # 1 diagonal, lies in [-1,1]
-            dissimilarity = 1 - adjacency
+            adjacency = pcorr # diagonal filled with 1, lies in [-1,1]. 1 means the greatest similarity and -1 means the least similarity
+            distance = 1 - adjacency # diagonal filled with 0, lies in [0,2]
         elif style == 'difference':
-            adjacency = pcorr / 2 # 0 diagonal, lies in [-1,1]
-            dissimilarity = 1 - adjacency - np.eye(pcorr.shape[0]) # subtracting a diagonal matrix to make dissimilarity of the same region 0
+            adjacency = pcorr / 2 # diagonal filled with 0, lies in [-1,1]
+            distance = 1 - adjacency - np.eye(pcorr.shape[0]) # subtracting a diagonal matrix to make distance between the same region 0
         else:
             raise ValueError("Choose \'style\' from \'original\' and \'difference\'.")
-        d = squareform(dissimilarity)
-        Z = linkage(d, method="average") 
+        distance_vector = squareform(distance)
+        Z = linkage(distance_vector, method="average") 
 
-        # choose best clustering threshold with solhouette score
+        # choose best clustering threshold with silhouette score
         best_k = 2
         best_score = -1
         for k in range(2, min(20, pcorr.shape[0])):
             labels = fcluster(Z, k, criterion='maxclust')
             if len(set(labels)) > 1:
-                score = silhouette_score(dissimilarity, labels.reshape(-1,1), metric='precomputed')
+                score = silhouette_score(distance, labels.reshape(-1,1).squeeze(), metric='precomputed')
                 if score > best_score:
                     best_score = score
                     best_k = k
@@ -347,7 +403,10 @@ class Visualizer():
         row_colors = [module_colors[m] for m in modules]
 
         # log-transform adjacency to increase contrast of heatmap blocks
-        A_plot = self.symmetric_log_transform(adjacency)
+        if log_transform == True:
+            A_plot = self.symmetric_log_transform(adjacency)
+        else:
+            A_plot = adjacency
         # adjust color of blocks in heatmap for easier comparison
         vmax = max(abs(A_plot.min()), abs(A_plot.max()))
         vmin = -vmax
@@ -367,7 +426,7 @@ class Visualizer():
                                 rotation=90, ha='right', fontsize=10)
             cg.ax_heatmap.set_yticklabels(cg.ax_heatmap.get_yticklabels(), 
                                         rotation=0, fontsize=10)
-            cg.figure.suptitle(title, fontsize=16, y=1.02)
+            cg.figure.suptitle(title, fontsize=title_fontsize, y=1.02)
 
             # highlight boundaries between clusters
             if show_boundary == True:
@@ -377,6 +436,7 @@ class Visualizer():
                 for b in boundaries:
                     cg.ax_heatmap.axhline(b + 0.5, color="black", linewidth=1.5, alpha=0.8)
                     cg.ax_heatmap.axvline(b + 0.5, color="black", linewidth=1.5, alpha=0.8)
+            plt.savefig(f"{title}.{save_to_file}", dpi=300)
             plt.show()
         else:
             plt.figure(figsize=figsize)
@@ -387,31 +447,45 @@ class Visualizer():
                              vmax=vmax,
                              xticklabels=self.gname,
                              yticklabels=self.gname,
-                             cbar_kws={'label': 'Value', 'shrink': 0.8})
+                             cbar_kws={'label': 'The (change of) partial correlations (negative: blue, positive: red)', 'shrink': 0.8})
             plt.xticks(rotation=90, ha='right', fontsize=10)
             plt.yticks(rotation=0, fontsize=10)
-            plt.title(title, fontsize=16, pad=20)            
-            plt.tight_layout()
+            plt.title(title, fontsize=title_fontsize, pad=20)            
+            plt.savefig(f"{title}.{save_to_file}", dpi=300)
             plt.show()
 
-    def plot_cell_network(self, adj_matrix: np.ndarray, cell_labels: list | None=None, title: str="Cell-Cell Interaction Network", 
-                            figsize : tuple[float, float]=(10, 10), node_size: float=300, 
-                            max_edge_width: float=5.0, min_edge_width: float=0.5, arrow_style: str='->', 
-                            font_size: float=10, remove_isolates: bool=True, top_edges: int | None=None, 
-                            show_edge_colorbar: bool=True):
+    def circleplot(self,
+                        adj_matrix: np.ndarray,
+                        cell_labels: list | None = None,
+                        log_transform: bool = True,
+                        title: str = "Cell-Cell Interaction Network",
+                        title_fontsize: float = 16,
+                        figsize: tuple[float, float] = (10, 10),
+                        node_size: float = 300,
+                        max_edge_width: float = 5.0,
+                        min_edge_width: float = 0.5,
+                        arrow_style: str = '->',
+                        font_size: float = 10,
+                        top_edges: int | None = None,
+                        show_edge_colorbar: bool = True,
+                        colorbar_label: str = "The change of partial correlations",
+                        save_to_file: str = "svg"):
         """
         Plot cell-cell interaction network using a communication matrix.
 
         Parameters
         ----------
-
         adj_matrix : np.ndarray
             Communication matrix of cells. A 2-dim matrix whose cols and rows correspond to a same group of cells with the same order.
             Positive values represent excitatory/activating interactions, negative values inhibitory/suppressing interactions.
         cell_labels : list | None
             (Optional) The label of cells, defaulted to None. 
+        log_transform : bool=True
+            Whether to transform adj_matrix with log10 to increase contrast between edges
         title : str
             Title of the figure.
+        title_fontsize : float
+            The font size of title, defaulted to 16
         figsize : tuple
             The size of the figure, defaulted to (10, 10).
         node_size : float
@@ -426,39 +500,29 @@ class Visualizer():
             The complete control sentence is given by '->,head_width=0.3,head_length=0.5' for example.
         font_size : int
             Font size of the node label.
-        remove_isolates : bool
-            Whether to remove isolated nodes or not.
         top_edges : int | None
             (Optional) Keep the strongest edges (based on absolute weight) and hide others.
         show_edge_colorbar : bool
             Whether to show color bar of the weight of the edges (positive/negative diverging colors).
+        color_bar_label : str
+            Labels explaining the colorbar, on the rightest side of the figure.
+        save_to_file : str
+            The file type of the saved image, defaulted to "svg".
         """
         import networkx as nx
         from matplotlib.patches import FancyArrowPatch
         from matplotlib.patches import Circle as MPLCircle
+
         n_nodes = adj_matrix.shape[0]
-        
+        if log_transform:
+            adj_matrix = self.symmetric_log_transform(adj_matrix)
+
         # Create a directed graph and add edges (include both positive and negative weights)
         G = nx.DiGraph()
         for i in range(n_nodes):
             for j in range(n_nodes):
                 weight = adj_matrix[i, j]
-                if weight != 0:                     # include both positive and negative
-                    G.add_edge(i, j, weight=weight)
-        
-        # Remove isolated nodes (nodes with no incoming or outgoing edges)
-        if remove_isolates:
-            isolated_nodes = [n for n in G.nodes if G.degree(n) == 0]
-            G.remove_nodes_from(isolated_nodes)
-            # Update mapping: The new node sequence is the remaining nodes in the graph
-            original_nodes = sorted(G.nodes)
-            # Re-number from 0 to k-1 to facilitate subsequent processing
-            node_remap = {orig: new for new, orig in enumerate(original_nodes)}
-            G = nx.relabel_nodes(G, node_remap, copy=True)
-            n_nodes = len(G.nodes)
-            if n_nodes == 0:
-                print("Warning: There are 0 nodes in the graph.")
-                return plt.subplots(figsize=figsize)
+                G.add_edge(i, j, weight=weight)
 
         # Limit the number of edges by only showing the top strongest edges (based on absolute weight)
         if top_edges is not None and top_edges > 0:
@@ -472,7 +536,7 @@ class Visualizer():
                 H.add_edge(u, v, weight=d['weight'])
             G = H
 
-        pos = nx.circular_layout(G) # Circular node layout
+        pos = nx.circular_layout(G)  # Circular node layout
 
         # Define node color
         node_colors = plt.cm.tab20(np.linspace(0, 1, n_nodes))
@@ -492,11 +556,19 @@ class Visualizer():
             max_abs = max(abs_weights)
             min_raw = min(raw_weights)
             max_raw = max(raw_weights)
-            
+
             # Color mapping: diverging colormap (negative -> cool, positive -> warm)
-            norm_color = plt.Normalize(vmin=min_raw, vmax=max_raw)
-            cmap = plt.get_cmap('coolwarm')    # strong contrast: blue (negative) ↔ red (positive)
-            
+            if max_raw <= 0:
+                norm_color = plt.Normalize(vmin=min_raw, vmax=max_raw)
+                cmap = plt.get_cmap('cool')  # strong contrast: blue (negative) red (positive)
+            elif min_raw >= 0:
+                norm_color = plt.Normalize(vmin=min_raw, vmax=max_raw)
+                cmap = plt.get_cmap('hot')
+            else:
+                m = max(abs(min_raw), max_raw)
+                norm_color = plt.Normalize(vmin=-m, vmax=m)
+                cmap = plt.get_cmap('coolwarm')
+
             # Edge width mapping: based on absolute weight
             for u, v, data in edges:
                 w_raw = data['weight']
@@ -520,13 +592,13 @@ class Visualizer():
                                         shrinkA=10, shrinkB=10,
                                         zorder=1)
                 ax.add_patch(arrow)
-            
+
             # Show edge color bar (showing signed weights)
             if show_edge_colorbar:
                 sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm_color)
                 sm.set_array([])
                 cbar = fig.colorbar(sm, ax=ax, shrink=0.7, aspect=20, pad=0.05)
-                cbar.set_label('The change of partial correlations (negative: blue, positive: red)', fontsize=10)
+                cbar.set_label(colorbar_label, fontsize=10)
 
         # Set node and label
         nx.draw_networkx_nodes(G, pos,
@@ -539,23 +611,27 @@ class Visualizer():
         labels = {}
         for node in G.nodes():
             if cell_labels is not None:
-                orig_node = original_nodes[node]
-                labels[node] = cell_labels[orig_node]
+                labels[node] = cell_labels[node]   # Direct indexing, no mapping needed
             else:
                 labels[node] = str(node)
         nx.draw_networkx_labels(G, pos, labels, font_size=font_size, ax=ax)
 
-        # Create a outer circle connecting all the nodes together 
+        # Create an outer circle connecting all the nodes together 
         radii = [np.sqrt(x**2 + y**2) for x, y in pos.values()]
         avg_radius = np.mean(radii) if radii else 0.9
         circle = MPLCircle((0, 0), avg_radius + 0.1, fill=False, edgecolor='gray', linewidth=1, linestyle='--', zorder=0)
         ax.add_patch(circle)
 
-        ax.set_title(title, fontsize=14, pad=20)
-        plt.tight_layout()
+        ax.set_title(title, fontsize=title_fontsize, pad=20)
+        plt.savefig(f"{title}.{save_to_file}", dpi=300)
         plt.show()
 
-    def temporal_deviation_ratio(self, thetas_seq: list[list[np.ndarray]] | list[np.ndarray] | np.ndarray, ts: list, title: str="Temporal deviation ratio"):
+    def temporal_deviation_ratio(self, thetas_seq: list[list[np.ndarray]] | list[np.ndarray] | np.ndarray, 
+                                 ts: list, 
+                                 figsize: tuple[float, float]=(10, 5),
+                                 title: str="Temporal deviation ratio",
+                                 title_fontsize: float=16,
+                                 save_to_file: str="svg"):
         """
         Plot the TD Ratio. 
         The input precision matrices are either from a bootstrap sample set
@@ -568,8 +644,14 @@ class Visualizer():
             prevision matrices from original observations with "shape" (T,p,p)
         ts : list
             The list of time labels
+        figsize : tuple[float, float]
+            The size of the figure, defaulted to (10, 5)
         title : str
             The title of the plot
+        title_fontsize : float
+            The font size of title, defaulted to 16
+        save_to_file : str
+            The file type of the saved image, defaulted to "svg"
         """
         if isinstance(thetas_seq[0], list):
             TD_ratio_seq = []
@@ -591,8 +673,8 @@ class Visualizer():
             # plot
             ages = np.array([str(t) for t in ts])
             age_shifts = np.char.add(np.char.add(ages[:-1], "->"), ages[1:])
-            plt.figure(figsize=(10, 5))
-            plt.plot(age_shifts, TD_ratios_mean, label="Mean")
+            plt.figure(figsize=figsize)
+            plt.plot(age_shifts, TD_ratios_mean, label="Mean of bootstrap results")
             # plt.axhline(y=1, linestyle='--', linewidth=1, color='red')
             plt.fill_between(
                 age_shifts,
@@ -610,9 +692,9 @@ class Visualizer():
             )
             plt.xlabel("Time stamp shifts")
             plt.ylabel("TD Ratios")
-            plt.title(title)
+            plt.title(title, fontsize=title_fontsize)
             plt.legend()
-            plt.tight_layout()
+            plt.savefig(f"{title}.{save_to_file}", dpi=300)
             plt.show()
         elif isinstance(thetas_seq[0], np.ndarray):
             total_TD_ratio = 0
@@ -626,98 +708,12 @@ class Visualizer():
 
             ages = np.array([str(t) for t in ts])
             age_shifts = np.char.add(np.char.add(ages[:-1], "->"), ages[1:])
-            plt.figure(figsize=(10, 5))
-            plt.plot(age_shifts, TD_ratio, label="Mean")
-            plt.axhline(y=TD_ratio_mean, linestyle='--', linewidth=1, color='red')
+            plt.figure(figsize=figsize)
+            plt.plot(age_shifts, TD_ratio)
+            plt.axhline(y=TD_ratio_mean, linestyle='--', linewidth=1, color='red', label="Average TD ratio")
             plt.xlabel("Time stamp shifts")
             plt.ylabel("TD Ratios")
-            plt.title(title)
+            plt.title(title, fontsize=title_fontsize)
             plt.legend()
-            plt.tight_layout()
+            plt.savefig(f"{title}.{save_to_file}", dpi=300)
             plt.show()
-        
-if __name__ == "__main__":
-    import gseapy as gp
-
-    precision_matrices = np.load("precision_matrices_CD4T_Glycolysis_all_samples_0.2_5.npy", allow_pickle=True)
-    # gname = pd.read_csv("PBMC_metabolic_gene.csv", sep=",").columns.tolist()
-    gname = ["ACSS1","ACSS2","ADH1A","ADH1B","ADH1C","ADH4","ADH5","ADH6","ADH7","ADPGK","AKR1A1",
-                "ALDH1B1","ALDH2","ALDH3A1","ALDH3A2","ALDH3B1","ALDH3B2","ALDH7A1","ALDH9A1","ALDOA",
-                "ALDOB","ALDOC","BPGM","DLAT","DLD","ENO1","ENO2","ENO3","ENO4","FBP1",
-                "FBP2","G6PC1","G6PC2","G6PC3","GALM","GAPDH","GAPDHS","GCK","GPI","HK1","HK2","HK3",
-                "HKDC1","LDHA","LDHAL6A","LDHAL6B","LDHB","LDHC","MINPP1","PCK1","PCK2","PDHA1","PDHA2",
-                "PDHB","PFKL","PFKM","PFKP","PGAM1","PGAM2","PGAM4","PGK1","PGK2","PGM1","PGM2","PKLR","PKM","TPI1"]
-
-    model = Visualizer(precision_matrices, gname, k=len(gname))
-    pcorrs = model.pcorrs
-    """Sankey plot"""
-    model.riverplot(min_times=10, source="sankey")
-
-    # pcorr = pcorrs[0]
-
-    # """Dendrogram clustering and enrichment analysis"""
-    # model.heatmap(pcorr, style='Dendrogram')
-    # gmlist = model.subject_by_module()
-    # count = 0; loc = 0
-    # for i, _ in enumerate(gmlist):
-    #     if len(_) > count:
-    #         count = len(_)
-    #         loc = i
-    #     print(i, len(_))
-    # print(i, count)
-
-    # # list of gene symbols of the biggest module
-    # gene_list2 = gmlist[i] 
-
-    # enr = gp.enrichr(
-    #     gene_list=gene_list2,
-    #     gene_sets=["KEGG_2021_Human", "GO_Biological_Process_2021", "Reactome_2022", "MSigDB_Hallmark_2020"],
-    #     organism="Human",
-    #     background=gname,
-    #     cutoff=0.05,
-    #     outdir=None
-    # )
-    # # print(enr.results.head())
-    # gp.dotplot(enr.results, 
-    #            x='Gene_set',
-    #            cutoff=0.05,                # cutoff filters enriched terms by adjusted p-value (FDR)
-    #            column="Adjusted P-value", 
-    #            xticklabels_rot=45, # rotate xtick labels
-    #            show_ring=True, # set to False to revmove outer ring
-    #            marker='o',
-    #            ofname="dot_CD4T_age0_dendrogram")
-    
-    # gp.barplot(enr.results, 
-    #            cutoff=0.05,
-    #            column="Adjusted P-value",
-    #            ofname="bar_CD4T_age0_dendrogram")
-    
-    # """Leiden network community identification and enrichment analysis"""
-    # model.heatmap(pcorr, style='Leiden')
-    # gmlist = model.subject_by_module()
-    # for i, _ in enumerate(gmlist):
-    #     print(i, len(_))
-
-    # gene_list = gmlist[1]
-    # enr = gp.enrichr(
-    #     gene_list=gene_list,
-    #     gene_sets=["KEGG_2021_Human", "GO_Biological_Process_2021", "Reactome_2022", "MSigDB_Hallmark_2020"],
-    #     organism="Human",
-    #     background=gname,
-    #     cutoff=0.05,
-    #     outdir=None
-    # )
-    # # print(enr.results.head())
-    # gp.dotplot(enr.results, 
-    #            x='Gene_set',
-    #            cutoff=0.1,                # cutoff filters enriched terms by adjusted p-value (FDR)
-    #            column="Adjusted P-value", 
-    #            xticklabels_rot=45, # rotate xtick labels
-    #            show_ring=True, # set to False to revmove outer ring
-    #            marker='o',
-    #            ofname="dot_CD4T_age0_leiden")
-    
-    # gp.barplot(enr.results, 
-    #            cutoff=0.1,
-    #            column="Adjusted P-value",
-    #            ofname="bar_CD4T_age0_leiden")
